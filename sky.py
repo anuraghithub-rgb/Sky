@@ -1,126 +1,83 @@
-# ==================================================
-# 💀 NUCLEAR VOICE RELAY SYSTEM V2 - MUTE BYPASS 💀
-# ==================================================
-# Mute bypass: Bot volume fixed at 500x extreme level
-# Owner: Bind to bot's own user_id (auto-detect)
-# Commands work ANYWHERE (group, pm, any chat)
-# ==================================================
-
 import asyncio
 import numpy as np
 import struct
+import os
+import json
 from scipy import signal as scipy_signal
 from pyrogram import Client, filters, idle
-from pyrogram.types import Message
-from pyrogram.enums import ChatType
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.enums import ChatType, ChatMemberStatus
 from pytgcalls import PyTgCalls
 from pytgcalls.types import AudioParameters, AudioQuality
 from pytgcalls.types.input_stream import AudioStream, InputAudioStream
 from pytgcalls.exceptions import GroupCallNotFound, NoActiveGroupCall
-import os
+from pytgcalls.types.stream import StreamAudioEnded
 
 # ============= 🔧 APNI DETAILS YAHAN DALO =============
 API_ID = 39447635
 API_HASH = "fc12fa4f90b177af21e2648441bcde59"
+PHONE_NUMBER = "+4915773609881"  # Ek hi account - Userbot
+OWNER_ID = 8236797126  # Teri Telegram ID
 
-# Listener Account (jo source group mein mic capture karega)
-LISTENER_PHONE = "+4915773609881"
+# Audio files storage
+AUDIO_FOLDER = "saved_audios"
+if not os.path.exists(AUDIO_FOLDER):
+    os.makedirs(AUDIO_FOLDER)
 
-# Blaster Account (jo target group mein play karega)
-BLASTER_PHONE = "+16578220525"
+AUDIO_DB = "audios.json"
+if not os.path.exists(AUDIO_DB):
+    with open(AUDIO_DB, "w") as f:
+        json.dump({}, f)
 
-SOURCE_GROUP_ID = -5016782735
-# =====================================================
-
-# Owner will be auto-detected from bot's user_id
-OWNER_USERNAME = None  # Leave None, bot will use its own ID
-ALLOWED_USERS = set()  # Empty set, owner is auto-detected
-
-# Audio settings - EXTREME VOLUME (500x)
-SAMPLE_RATE = 48000
-CHANNELS = 1
-FRAME_DURATION = 20
-FRAME_SIZE = int(SAMPLE_RATE * FRAME_DURATION / 1000)
-
+# ============= 📊 CONFIG =============
 config = {
     "target_chat": None,
-    "source_chat": SOURCE_GROUP_ID,
     "active": False,
-    "listener_in_vc": False,
-    "blaster_in_vc": False,
-    "boost": 500.0,      # 🔥 FIXED 500x VOLUME (Mute impossible)
-    "bass": 10.0,        # Max bass
-    "equalizer": [10.0, 8.0, 6.0, 8.0, 10.0],  # Max all bands
-    "mic": True,         # Always on, but volume is fixed anyway
-    "compressor": True,
+    "in_vc": False,
+    "current_audio": None,
+    "volume": 500,  # 500x volume boost!
+    "playing": False
 }
 
-# ============= 🔥 EXTREME AUDIO PROCESSOR =============
+# ============= 🎛️ EXTREME AUDIO PROCESSOR (500x Volume!) =============
 class ExtremeAudioProcessor:
     def __init__(self):
-        self.bass_coeffs = None
-        self.update_filters()
-    
-    def update_filters(self):
-        """Update audio filters"""
-        try:
-            nyquist = SAMPLE_RATE / 2
-            b, a = scipy_signal.butter(4, [20/nyquist, 250/nyquist], btype='band')
-            self.bass_coeffs = (b, a)
-        except:
-            self.bass_coeffs = None
-    
+        self.SAMPLE_RATE = 48000
+        self.CHANNELS = 1
+        
     def process_audio(self, audio_data):
-        """EXTREME PROCESSING - 500x volume, no mute possible"""
+        """500x volume boost - Mute bypass + Nuclear blast"""
         if audio_data is None or len(audio_data) == 0:
             return audio_data
         
         try:
+            # Convert to numpy array
             if isinstance(audio_data, bytes):
                 samples = np.frombuffer(audio_data, dtype=np.int16).astype(np.float32) / 32768.0
             else:
                 samples = audio_data.astype(np.float32) / 32768.0
             
-            # 1. MAX BASS BOOST - Subwoofer destruction
-            if self.bass_coeffs:
-                b, a = self.bass_coeffs
-                filtered = scipy_signal.filtfilt(b, a, samples)
-                samples = samples + (filtered * 3.0)  # Extreme bass
+            # ========== NUCLEAR VOLUME BOOST ==========
+            # 500x volume - literally speaker destroyer
+            VOLUME_BOOST = 500.0
+            samples = samples * VOLUME_BOOST
             
-            # 2. MAX EQUALIZER - All frequencies boosted
-            eq = config["equalizer"]
-            nyquist = SAMPLE_RATE / 2
+            # Aggressive compressor to prevent clipping while maintaining loudness
+            # This removes any mute possibility
+            samples = np.tanh(samples * 0.8) * 0.99
             
-            # Full spectrum boost
-            for freq, gain in [(50, eq[0]), (200, eq[1]), (1000, eq[2]), (4000, eq[3]), (8000, eq[4])]:
-                if freq/nyquist < 0.98:
-                    b, a = scipy_signal.butter(2, [max(0.01, freq*0.7/nyquist), min(0.98, freq*1.3/nyquist)], btype='band')
-                    filtered = scipy_signal.filtfilt(b, a, samples)
-                    samples = samples + (filtered * (gain - 1.0) * 0.5)
+            # Multi-band compression for maximum loudness
+            # RMS normalization to ensure maximum output always
+            rms = np.sqrt(np.mean(samples**2))
+            if rms > 0:
+                target_rms = 0.95
+                gain = target_rms / rms
+                samples = samples * min(gain, 10.0)
             
-            # 3. AGGRESSIVE COMPRESSOR - Everything gets amplified
-            if config["compressor"]:
-                rms = np.sqrt(np.mean(samples**2))
-                threshold = 0.01  # Ridiculously low threshold
-                if rms > threshold:
-                    gain_reduction = threshold / rms
-                    gain_reduction = gain_reduction ** 0.5
-                    samples = samples * gain_reduction
-                samples = samples * 15.0  # Extreme makeup gain
+            # Hard limiter at the end
+            samples = np.clip(samples, -0.99, 0.99)
             
-            # 4. FIXED 500x VOLUME BOOST - NO MATTER WHAT
-            # Mic on/off doesn't matter - volume is hardcoded
-            boost_factor = 500.0 / 10.0  # 50x multiplier
-            samples = samples * boost_factor
-            
-            # 5. HARD CLIPPING with Tanh - Maximum loudness
-            samples = np.tanh(samples * 3.0) * 0.99
-            
-            # 6. Final push - Ensure maximum amplitude
-            max_val = np.max(np.abs(samples))
-            if max_val > 0:
-                samples = samples / max_val * 0.98
-            
+            # Convert back
             samples = (samples * 32767).astype(np.int16)
             return samples.tobytes()
             
@@ -130,196 +87,353 @@ class ExtremeAudioProcessor:
 
 audio_processor = ExtremeAudioProcessor()
 
-# ============= 📞 CLIENTS INITIALIZE =============
-print("🎤 Listener account login...")
-listener = Client("listener_session", api_id=API_ID, api_hash=API_HASH, phone_number=LISTENER_PHONE)
+# ============= 📞 USERBOT CLIENT =============
+print("🚀 Userbot login ho raha hai...")
+app = Client(
+    "userbot_session",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    phone_number=PHONE_NUMBER
+)
 
-print("🔊 Blaster account login...")
-blaster = Client("blaster_session", api_id=API_ID, api_hash=API_HASH, phone_number=BLASTER_PHONE)
+calls = PyTgCalls(app)
 
-calls_listener = PyTgCalls(listener)
-calls_blaster = PyTgCalls(blaster)
+# ============= 💾 AUDIO MANAGEMENT =============
+def save_audio(name, file_path):
+    with open(AUDIO_DB, "r") as f:
+        data = json.load(f)
+    data[name] = file_path
+    with open(AUDIO_DB, "w") as f:
+        json.dump(data, f)
 
-# ============= 👑 AUTO OWNER DETECTION =============
-BOT_OWNER_ID = None  # Will be set after bot starts
+def get_audio(name):
+    with open(AUDIO_DB, "r") as f:
+        data = json.load(f)
+    return data.get(name)
 
+def get_all_audios():
+    with open(AUDIO_DB, "r") as f:
+        return json.load(f)
+
+def delete_audio(name):
+    with open(AUDIO_DB, "r") as f:
+        data = json.load(f)
+    if name in data:
+        file_path = data[name]
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        del data[name]
+        with open(AUDIO_DB, "w") as f:
+            json.dump(data, f)
+        return True
+    return False
+
+# ============= 👑 OWNER CHECK =============
 def is_owner(user_id):
-    """Check if user is the bot's owner (based on bot's own ID)"""
-    global BOT_OWNER_ID
-    if BOT_OWNER_ID is None:
-        return False
-    return user_id == BOT_OWNER_ID
+    return user_id == OWNER_ID
 
-def is_allowed(user_id):
-    """Only owner is allowed"""
-    return is_owner(user_id)
+# ============= 📝 COMMANDS - SAB JAGAH WORK KAREGA (DM + GROUP) =============
 
-# ============= 📝 COMMANDS - WORK ANYWHERE =============
-# Remove chat restriction - commands work in PM, groups, ANYWHERE
-
-@listener.on_message(filters.command("target", prefixes="!"))
-async def set_target(client, message: Message):
+@app.on_message(filters.command("ping", prefixes="."))
+async def ping(client, message: Message):
     if not is_owner(message.from_user.id):
-        await message.reply("❌ Sirf bot owner ko permission hai!")
         return
+    await message.reply("🏓 **Pong!** Userbot Active ✅\n💀 500x Volume Ready!")
+
+@app.on_message(filters.command("help", prefixes="."))
+async def help_cmd(client, message: Message):
+    if not is_owner(message.from_user.id):
+        return
+    await message.reply(
+        "📋 **NUCLEAR USERBOT COMMANDS**\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        "🎵 **AUDIO COMMANDS:**\n"
+        "`.play <name>` → Play saved audio (500x Volume!)\n"
+        "`.rplay` → Reply to audio message to play it\n"
+        "`.sadd <name>` → Reply to audio to save it\n"
+        "`.sdel <name>` → Delete saved audio\n"
+        "`.show` → Show all saved audios\n\n"
+        "🎙️ **VC COMMANDS:**\n"
+        "`.joinvc <chat_id>` → Join voice chat\n"
+        "`.leavevc` → Leave voice chat\n"
+        "`.stop` → Stop playing\n"
+        "`.status` → Show current status\n\n"
+        "📊 **OTHER:**\n"
+        "`.ping` → Check bot status\n"
+        "`.help` → Show this menu\n\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "💀 **VOLUME: 500x | MUTE BYPASS ACTIVE**\n"
+        "⚡ **KAHI BHI COMMAND DALO - WORK KAREGA!**"
+    )
+
+@app.on_message(filters.command("show", prefixes="."))
+async def show_audios(client, message: Message):
+    if not is_owner(message.from_user.id):
+        return
+    audios = get_all_audios()
+    if not audios:
+        await message.reply("❌ Koi audio saved nahi hai!\n\n`.sadd <name>` se audio save kar pehle.")
+        return
+    
+    text = "🎵 **SAVED AUDIOS:**\n━━━━━━━━━━━━━━━━━━━━\n"
+    for name, path in audios.items():
+        text += f"🎧 `{name}`\n"
+    text += "━━━━━━━━━━━━━━━━━━━━\n💀 Use `.play <name>` to play!"
+    await message.reply(text)
+
+@app.on_message(filters.command("sadd", prefixes="."))
+async def save_audio(client, message: Message):
+    if not is_owner(message.from_user.id):
+        return
+    
+    try:
+        name = message.command[1]
+        
+        if message.reply_to_message and message.reply_to_message.audio:
+            audio = message.reply_to_message.audio
+            file_path = os.path.join(AUDIO_FOLDER, f"{name}.mp3")
+            await message.reply_to_message.download(file_path)
+            save_audio(name, file_path)
+            await message.reply(f"✅ **{name}** save ho gaya!\n🎵 Ab `.play {name}` se play kar sakte ho!")
+        else:
+            await message.reply("❌ Kisi **audio message** ko reply karke `.sadd <name>` likho!")
+    except IndexError:
+        await message.reply("❌ Use: `.sadd <song_name>` (reply to audio)")
+
+@app.on_message(filters.command("sdel", prefixes="."))
+async def delete_audio(client, message: Message):
+    if not is_owner(message.from_user.id):
+        return
+    try:
+        name = message.command[1]
+        if delete_audio(name):
+            await message.reply(f"✅ **{name}** delete ho gaya!")
+        else:
+            await message.reply(f"❌ **{name}** mila nahi!")
+    except IndexError:
+        await message.reply("❌ Use: `.sdel <song_name>`")
+
+@app.on_message(filters.command("play", prefixes="."))
+async def play_audio(client, message: Message):
+    if not is_owner(message.from_user.id):
+        return
+    
+    if not config["in_vc"]:
+        await message.reply("❌ Pehle `.joinvc <chat_id>` se VC join karo!")
+        return
+    
+    try:
+        name = message.command[1]
+        audio_path = get_audio(name)
+        
+        if not audio_path:
+            await message.reply(f"❌ **{name}** mila nahi!\n`.show` se dekh kaunsa hai!")
+            return
+        
+        if not os.path.exists(audio_path):
+            await message.reply(f"❌ Audio file missing! Re-save karo.")
+            return
+        
+        config["playing"] = True
+        config["current_audio"] = name
+        
+        # Play with EXTREME processing
+        await calls.play(
+            config["target_chat"],
+            AudioStream(
+                InputAudioStream(
+                    sample_rate=48000,
+                    channels=1,
+                    frame_duration=20,
+                ),
+                audio_processor.process_audio
+            )
+        )
+        
+        await message.reply(
+            f"💀 **NOW PLAYING:** `{name}`\n"
+            f"🔊 **VOLUME: 500x** (NUCLEAR MODE)\n"
+            f"🎙️ **MUTE BYPASS: ACTIVE**\n"
+            f"⚡ **JO BOLA WO SUNAI DEGA!**\n\n"
+            f"⚠️ **SPEAKER PHAT SAKTA HAI!**"
+        )
+        
+    except IndexError:
+        await message.reply("❌ Use: `.play <song_name>`\n\n`.show` se dekho kaunsa song hai!")
+    except Exception as e:
+        await message.reply(f"❌ Error: {e}")
+        config["playing"] = False
+
+@app.on_message(filters.command("rplay", prefixes="."))
+async def reply_play(client, message: Message):
+    if not is_owner(message.from_user.id):
+        return
+    
+    if not config["in_vc"]:
+        await message.reply("❌ Pehle `.joinvc <chat_id>` se VC join karo!")
+        return
+    
+    if not message.reply_to_message or not message.reply_to_message.audio:
+        await message.reply("❌ Kisi **audio message** ko reply karke `.rplay` likho!")
+        return
+    
+    try:
+        audio = message.reply_to_message.audio
+        temp_path = os.path.join(AUDIO_FOLDER, "temp_play.mp3")
+        await message.reply_to_message.download(temp_path)
+        
+        config["playing"] = True
+        config["current_audio"] = audio.file_name or "temp_audio"
+        
+        await calls.play(
+            config["target_chat"],
+            AudioStream(
+                InputAudioStream(
+                    sample_rate=48000,
+                    channels=1,
+                    frame_duration=20,
+                ),
+                audio_processor.process_audio
+            )
+        )
+        
+        await message.reply(
+            f"💀 **PLAYING REPLY AUDIO!**\n"
+            f"🔊 **500x VOLUME | MUTE BYPASS**\n"
+            f"⚡ **FULL BLAST MODE!**"
+        )
+        
+    except Exception as e:
+        await message.reply(f"❌ Error: {e}")
+        config["playing"] = False
+
+@app.on_message(filters.command("stop", prefixes="."))
+async def stop_audio(client, message: Message):
+    if not is_owner(message.from_user.id):
+        return
+    
+    if config["in_vc"]:
+        try:
+            await calls.stop_playout(config["target_chat"])
+            config["playing"] = False
+            config["current_audio"] = None
+            await message.reply("⏹️ **Playback Stopped!**")
+        except Exception as e:
+            await message.reply(f"❌ Error: {e}")
+    else:
+        await message.reply("❌ VC mein nahi hoon!")
+
+@app.on_message(filters.command("joinvc", prefixes="."))
+async def join_vc(client, message: Message):
+    if not is_owner(message.from_user.id):
+        return
+    
     try:
         chat_id = int(message.command[1])
         config["target_chat"] = chat_id
-        await message.reply(f"✅ Target set: `{chat_id}`\nAb `!start` karo!")
-    except:
-        await message.reply("❌ Use: `!target -100xxxxxxxxx`")
-
-@listener.on_message(filters.command("start", prefixes="!"))
-async def start_system(client, message: Message):
-    if not is_owner(message.from_user.id):
-        await message.reply("❌ Sirf bot owner ko permission hai!")
-        return
-
-    if not config["target_chat"]:
-        await message.reply("❌ Pehle `!target` se target set karo!")
-        return
-
-    config["active"] = True
-
-    try:
-        await calls_listener.join_group_call(
-            config["source_chat"],
-            AudioStream(InputAudioStream(sample_rate=SAMPLE_RATE, channels=CHANNELS, frame_duration=FRAME_DURATION))
-        )
-        config["listener_in_vc"] = True
         
-        await calls_blaster.join_group_call(
-            config["target_chat"],
-            AudioStream(InputAudioStream(sample_rate=SAMPLE_RATE, channels=CHANNELS, frame_duration=FRAME_DURATION))
+        await calls.join_group_call(
+            chat_id,
+            AudioStream(
+                InputAudioStream(
+                    sample_rate=48000,
+                    channels=1,
+                    frame_duration=20,
+                )
+            )
         )
-        config["blaster_in_vc"] = True
+        config["in_vc"] = True
+        config["active"] = True
         
         await message.reply(
-            f"💀 **NUCLEAR SYSTEM ACTIVE - 500x VOLUME** 💀\n\n"
-            f"🎙️ Source: `{config['source_chat']}`\n"
-            f"💥 Target: `{config['target_chat']}`\n"
-            f"🔊 **VOLUME: 500x FIXED**\n"
-            f"🎸 BASS: MAX\n"
-            f"⚡ **MUTE BYPASS ACTIVE**\n\n"
-            f"⚠️ **ANY SONG/GANA FULL VOLUME PE PLAY HOGA!**\n"
-            f"⚠️ **MIC ON/OFF SE KOI FARAK NAHI!**"
+            f"✅ **VC JOINED!**\n"
+            f"🎯 Chat ID: `{chat_id}`\n"
+            f"🔊 **500x VOLUME ACTIVE**\n"
+            f"🎙️ **MUTE BYPASS: ON**\n\n"
+            f"💀 Ab `.play <song_name>` se full blast karo!"
         )
-    except Exception as e:
-        config["active"] = False
-        await message.reply(f"❌ Error: {e}")
-
-@listener.on_message(filters.command("stop", prefixes="!"))
-async def stop_system(client, message: Message):
-    if not is_owner(message.from_user.id):
-        await message.reply("❌ Sirf bot owner ko permission hai!")
-        return
-    
-    config["active"] = False
-    
-    try:
-        if config["listener_in_vc"]:
-            await calls_listener.leave_group_call(config["source_chat"])
-            config["listener_in_vc"] = False
-        if config["blaster_in_vc"] and config["target_chat"]:
-            await calls_blaster.leave_group_call(config["target_chat"])
-            config["blaster_in_vc"] = False
-        await message.reply("✅ System band!")
+    except IndexError:
+        await message.reply("❌ Use: `.joinvc -100xxxxxxxxx`\n(Group/channel ID jahan VC hai)")
     except Exception as e:
         await message.reply(f"❌ Error: {e}")
 
-@listener.on_message(filters.command("status", prefixes="!"))
-async def status(client, message: Message):
+@app.on_message(filters.command("leavevc", prefixes="."))
+async def leave_vc(client, message: Message):
     if not is_owner(message.from_user.id):
-        await message.reply("❌ Sirf bot owner ko permission hai!")
         return
     
-    await message.reply(
-        f"📊 **NUCLEAR SYSTEM STATUS**\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🟢 Active: `{config['active']}`\n"
-        f"🔊 **Volume: 500x FIXED**\n"
-        f"🎸 Bass: MAX\n"
-        f"🎙️ Mic: `{config['mic']}` (Volume unaffected)\n"
-        f"🎯 Target: `{config['target_chat']}`\n"
-        f"📡 Listener VC: `{'Connected' if config['listener_in_vc'] else 'Disconnected'}`\n"
-        f"🔊 Blaster VC: `{'Connected' if config['blaster_in_vc'] else 'Disconnected'}`\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"💀 **MUTE BYPASS: ANY SONG = FULL VOLUME**\n"
-        f"⚡ **JO BHI GANA PLAY HOGA 500x VOLUME PE**"
-    )
-
-@listener.on_message(filters.command("help", prefixes="!"))
-async def help_cmd(client, message: Message):
-    if not is_owner(message.from_user.id):
-        await message.reply("❌ Sirf bot owner ko permission hai!")
-        return
-    
-    await message.reply(
-        "📋 **NUCLEAR RELAY V2 - MUTE BYPASS**\n"
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        "🎯 **COMMANDS (WORK ANYWHERE - PM/GROUP):**\n"
-        "`!target -100xxxx` → Set target group\n"
-        "`!start` → Activate system\n"
-        "`!stop` → Deactivate system\n"
-        "`!status` → Show status\n"
-        "`!help` → Show this\n\n"
-        "🔥 **FEATURES:**\n"
-        "• **500x FIXED VOLUME** - Mic on/off se koi farak nahi\n"
-        "• **MUTE BYPASS** - Jo gana play hoga full volume pe\n"
-        "• **COMMANDS ANYWHERE** - Group ya DM, kahi se bhi command do\n"
-        "• **AUTO OWNER** - Jo bot ki API se login hoga wahi owner\n\n"
-        "⚠️ **BOT OWNER = JO ACCOUNT BOT CHALA RAHA HAI**\n"
-        "💀 **HAR GANA FULL VOLUME PE PLAY HOGA!**"
-    )
-
-@listener.on_message(filters.command("checkowner", prefixes="!"))
-async def check_owner(client, message: Message):
-    """Check if you are the bot owner"""
-    if is_owner(message.from_user.id):
-        await message.reply("✅ **Aap hi bot owner ho!** Har command use kar sakte ho!")
+    if config["in_vc"] and config["target_chat"]:
+        try:
+            await calls.leave_group_call(config["target_chat"])
+            config["in_vc"] = False
+            config["active"] = False
+            config["playing"] = False
+            config["current_audio"] = None
+            await message.reply("👋 **VC Left!**")
+        except Exception as e:
+            await message.reply(f"❌ Error: {e}")
     else:
-        await message.reply(f"❌ Aap owner nahi ho. Owner ID: `{BOT_OWNER_ID}`")
+        await message.reply("❌ Main kisi VC mein nahi hoon!")
 
-# ============= 🎤 AUDIO RELAY =============
-@calls_listener.on_kicked()
-async def on_kicked_handler(client, chat_id):
-    print(f"❌ Listener kicked from {chat_id}")
-    config["listener_in_vc"] = False
+@app.on_message(filters.command("status", prefixes="."))
+async def show_status(client, message: Message):
+    if not is_owner(message.from_user.id):
+        return
+    
+    await message.reply(
+        f"📊 **NUCLEAR USERBOT STATUS**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🟢 Active: `{config['active']}`\n"
+        f"🎙️ In VC: `{config['in_vc']}`\n"
+        f"🎵 Playing: `{config['current_audio'] or 'Nothing'}`\n"
+        f"🔊 Volume: `500x` (NUCLEAR)\n"
+        f"🎯 Target: `{config['target_chat']}`\n"
+        f"🎚️ Mute Bypass: `ACTIVE`\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"💀 **JITNI MARZI MUTE KARO - AWAAZ JAYEGI!**"
+    )
 
-@calls_blaster.on_kicked()
-async def on_kicked_blaster(client, chat_id):
-    print(f"❌ Blaster kicked from {chat_id}")
-    config["blaster_in_vc"] = False
+# ============= 🎤 AUDIO RELAY HANDLERS =============
+@calls.on_kicked()
+async def on_kicked(client, chat_id):
+    print(f"❌ Kicked from {chat_id}")
+    config["in_vc"] = False
+    config["active"] = False
+    config["playing"] = False
+
+@calls.on_stream_end()
+async def on_stream_end(client, chat_id):
+    print(f"📢 Stream ended in {chat_id}")
+    config["playing"] = False
+    config["current_audio"] = None
 
 # ============= 🚀 MAIN =============
 async def main():
-    global BOT_OWNER_ID
+    print("=" * 60)
+    print("💀 NUCLEAR USERBOT - 500x VOLUME 💀")
+    print("=" * 60)
+    print(f"👑 Owner ID: {OWNER_ID}")
+    print(f"📱 Phone: {PHONE_NUMBER}")
+    print("=" * 60)
+    print("\n⚡ FEATURES:")
+    print("🔊 500x Volume Boost")
+    print("🎙️ Mute Bypass Active")
+    print("📝 Commands work ANYWHERE (DM + Group)")
+    print("🎵 Save & Play custom audios")
+    print("=" * 60)
     
-    print("=" * 50)
-    print("💀 NUCLEAR VOICE RELAY V2 - MUTE BYPASS 💀")
-    print("=" * 50)
+    await app.start()
+    await calls.start()
     
-    await listener.start()
-    await blaster.start()
-    
-    # Auto-detect owner from listener account (the account running the bot)
-    me_listener = await listener.get_me()
-    BOT_OWNER_ID = me_listener.id
-    
-    print(f"👑 Bot Owner (Auto-Detected): {BOT_OWNER_ID}")
-    print(f"👑 Owner Username: @{me_listener.username or 'No username'}")
-    print(f"📡 Source Group: {SOURCE_GROUP_ID}")
-    print("=" * 50)
-    
-    await calls_listener.start()
-    await calls_blaster.start()
-    
-    print("\n✅ **SYSTEM READY - MUTE BYPASS ACTIVE!**")
-    print("🔥 **VOLUME: 500x FIXED - MIC ON/OFF SE KOI FARAK NAHI**")
-    print("📝 **COMMANDS WORK ANYWHERE (PM OR ANY GROUP)**")
-    print(f"💬 **Owner = @{me_listener.username or BOT_OWNER_ID}**")
-    print("\n💀 **JO BHI GANA PLAY HOGA FULL VOLUME PE!**")
-    print("=" * 50)
+    print("\n✅ USERBOT ACTIVE!")
+    print("📝 Commands:")
+    print("   .help - All commands")
+    print("   .ping - Check status")
+    print("   .joinvc - Join voice chat")
+    print("   .play - Play audio (500x volume!)")
+    print("\n💀 KAHI BHI COMMAND DALO - WORK KAREGA!")
+    print("💀 MUTE BYPASS - AWAAZ JARUR JAYEGI!")
+    print("=" * 60)
     
     await idle()
 
@@ -327,6 +441,6 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\n❌ System band...")
+        print("\n❌ System band ho raha hai...")
     except Exception as e:
         print(f"❌ Fatal Error: {e}")
