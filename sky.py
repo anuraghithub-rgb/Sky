@@ -17,7 +17,7 @@ from pytgcalls.types.stream import StreamAudioEnded
 API_ID = 39447635
 API_HASH = "fc12fa4f90b177af21e2648441bcde59"
 PHONE_NUMBER = "+4915773609881"  # Ek hi account - Userbot
-OWNER_ID = 8236797126  # Teri Telegram ID
+OWNER_ID = 8477195695  # Teri Telegram ID
 
 # Audio files storage
 AUDIO_FOLDER = "saved_audios"
