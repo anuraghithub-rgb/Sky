@@ -1,57 +1,68 @@
-from flask import Flask, render_template_string, request, jsonify, session
+from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for
 import requests
 import time
 import random
 import os
+import json
 from datetime import datetime, timedelta
+from threading import Thread
 
 app = Flask(__name__)
-app.secret_key = "jubayer_hosting_secret_159357"
+app.secret_key = "oggy_secret_key_159357_oggy_killer"
 
 # A4F API Configuration
 A4F_API_URL = "https://samuraiapi.in/v1/chat/completions"
 A4F_API_KEY = "sk-NK6SS9tpWghyFJwkZLoCis1sMaF6RwQ5WF09mUoKKR0VKCm7"
 A4F_MODEL = "provider10-claude-sonnet-4-20250514(clinesp)"
 
-# Mock database users
-USERS = {
-    "JUBAYER": "JUBAYER"
-}
+# File to store pending approvals
+PENDING_FILE = "pending_users.json"
+APPROVED_FILE = "approved_users.json"
 
-# Server stats tracking
-server_stats = {
-    "start_time": datetime.now(),
-    "is_running": True,
-    "cpu_usage": 0.5,
-    "ram_usage": 256,
-    "logs": ["[INFO] Server initialized", "[INFO] JUBAYER HOSTING online"]
-}
+def load_pending_users():
+    if os.path.exists(PENDING_FILE):
+        with open(PENDING_FILE, 'r') as f:
+            return json.load(f)
+    return {}
+
+def save_pending_users(users):
+    with open(PENDING_FILE, 'w') as f:
+        json.dump(users, f, indent=2)
+
+def load_approved_users():
+    if os.path.exists(APPROVED_FILE):
+        with open(APPROVED_FILE, 'r') as f:
+            return json.load(f)
+    return {"OGGY": {"password": "OGGY159357", "created": str(datetime.now())}}
+
+def save_approved_users(users):
+    with open(APPROVED_FILE, 'w') as f:
+        json.dump(users, f, indent=2)
+
+# Load data
+pending_users = load_pending_users()
+approved_users = load_approved_users()
 
 def call_a4f_api(prompt):
-    """Call A4F Claude API and return response"""
     headers = {
         "Authorization": f"Bearer {A4F_API_KEY}",
         "Content-Type": "application/json"
     }
-    
     payload = {
         "model": A4F_MODEL,
-        "messages": [
-            {"role": "user", "content": prompt}
-        ],
+        "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.7,
         "max_tokens": 500
     }
-    
     try:
         response = requests.post(A4F_API_URL, headers=headers, json=payload, timeout=30)
         if response.status_code == 200:
             data = response.json()
-            return data.get("choices", [{}])[0].get("message", {}).get("content", "No response from AI")
+            return data.get("choices", [{}])[0].get("message", {}).get("content", "No response")
         else:
-            return f"API Error: {response.status_code} - {response.text}"
+            return f"API Error: {response.status_code}"
     except Exception as e:
-        return f"Connection Error: {str(e)}"
+        return f"Error: {str(e)}"
 
 # HTML Template
 HTML_TEMPLATE = """
@@ -60,7 +71,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>JUBAYER HOSTING - Premium Solution</title>
+    <title>OGGY HOSTING - Premium Solution</title>
     <style>
         * {
             margin: 0;
@@ -69,10 +80,10 @@ HTML_TEMPLATE = """
         }
         
         body {
-            background: linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 100%);
-            font-family: 'Courier New', 'Fira Code', monospace;
+            background: linear-gradient(135deg, #0a0a0a 0%, #1a0a2e 100%);
+            font-family: 'Courier New', monospace;
             min-height: 100vh;
-            color: #00ff9d;
+            color: #ff00ff;
         }
         
         .container {
@@ -81,18 +92,17 @@ HTML_TEMPLATE = """
             padding: 20px;
         }
         
-        /* Header */
         .header {
             text-align: center;
             padding: 30px;
-            border-bottom: 2px solid #00ff9d;
+            border-bottom: 2px solid #ff00ff;
             margin-bottom: 30px;
             animation: glow 2s ease-in-out infinite alternate;
         }
         
         @keyframes glow {
-            from { text-shadow: 0 0 5px #00ff9d; }
-            to { text-shadow: 0 0 20px #00ff9d; }
+            from { text-shadow: 0 0 5px #ff00ff; }
+            to { text-shadow: 0 0 20px #ff00ff; }
         }
         
         .header h1 {
@@ -100,28 +110,24 @@ HTML_TEMPLATE = """
             letter-spacing: 3px;
         }
         
+        .header h1 span {
+            color: #00ff00;
+        }
+        
         .header p {
-            color: #00ff9d;
+            color: #ff00ff;
             opacity: 0.8;
             margin-top: 10px;
         }
         
-        /* Login Box */
-        .login-box {
+        .login-box, .register-box, .admin-box {
             background: rgba(0, 0, 0, 0.85);
-            border: 2px solid #00ff9d;
+            border: 2px solid #ff00ff;
             border-radius: 15px;
             padding: 40px;
             max-width: 500px;
-            margin: 100px auto;
+            margin: 20px auto;
             backdrop-filter: blur(10px);
-            box-shadow: 0 0 50px rgba(0, 255, 157, 0.3);
-        }
-        
-        .login-box h3 {
-            text-align: center;
-            margin-bottom: 30px;
-            font-size: 1.5em;
         }
         
         .input-group {
@@ -131,15 +137,15 @@ HTML_TEMPLATE = """
         .input-group label {
             display: block;
             margin-bottom: 10px;
-            color: #00ff9d;
+            color: #ff00ff;
         }
         
         .input-group input {
             width: 100%;
             padding: 12px;
             background: #000;
-            border: 1px solid #00ff9d;
-            color: #00ff9d;
+            border: 1px solid #ff00ff;
+            color: #ff00ff;
             font-family: monospace;
             font-size: 1em;
             border-radius: 5px;
@@ -148,13 +154,13 @@ HTML_TEMPLATE = """
         .input-group input:focus {
             outline: none;
             border-width: 2px;
-            box-shadow: 0 0 10px #00ff9d;
+            box-shadow: 0 0 10px #ff00ff;
         }
         
         button {
             width: 100%;
             padding: 12px;
-            background: #00ff9d;
+            background: #ff00ff;
             color: #000;
             border: none;
             font-size: 1.1em;
@@ -166,19 +172,18 @@ HTML_TEMPLATE = """
         }
         
         button:hover {
-            background: #00cc7d;
+            background: #cc00cc;
             transform: scale(1.02);
-            box-shadow: 0 0 20px #00ff9d;
+            box-shadow: 0 0 20px #ff00ff;
         }
         
-        /* Dashboard */
         .dashboard {
             display: none;
         }
         
         .top-bar {
             background: rgba(0, 0, 0, 0.9);
-            border: 1px solid #00ff9d;
+            border: 1px solid #ff00ff;
             border-radius: 10px;
             padding: 15px;
             margin-bottom: 20px;
@@ -187,14 +192,15 @@ HTML_TEMPLATE = """
             align-items: center;
         }
         
-        .logout-btn {
+        .logout-btn, .admin-panel-btn {
             width: auto;
             padding: 8px 20px;
             background: #ff0040;
+            margin-left: 10px;
         }
         
-        .logout-btn:hover {
-            background: #cc0033;
+        .admin-panel-btn {
+            background: #ff8800;
         }
         
         .stats-panel {
@@ -206,7 +212,7 @@ HTML_TEMPLATE = """
         
         .stat-card {
             background: rgba(0, 0, 0, 0.85);
-            border: 1px solid #00ff9d;
+            border: 1px solid #ff00ff;
             border-radius: 10px;
             padding: 20px;
             transition: transform 0.3s;
@@ -214,7 +220,7 @@ HTML_TEMPLATE = """
         
         .stat-card:hover {
             transform: translateY(-5px);
-            box-shadow: 0 0 30px rgba(0, 255, 157, 0.2);
+            box-shadow: 0 0 30px rgba(255, 0, 255, 0.2);
         }
         
         .stat-label {
@@ -230,14 +236,14 @@ HTML_TEMPLATE = """
         
         .terminal {
             background: #000;
-            border: 2px solid #00ff9d;
+            border: 2px solid #ff00ff;
             border-radius: 10px;
             margin: 20px 0;
             overflow: hidden;
         }
         
         .terminal-header {
-            background: #00ff9d;
+            background: #ff00ff;
             color: #000;
             padding: 10px;
             font-weight: bold;
@@ -255,7 +261,7 @@ HTML_TEMPLATE = """
         
         .terminal-line {
             margin: 5px 0;
-            color: #00ff9d;
+            color: #ff00ff;
         }
         
         .terminal-input-line {
@@ -267,8 +273,8 @@ HTML_TEMPLATE = """
         .terminal-input {
             flex: 1;
             background: #111;
-            border: 1px solid #00ff9d;
-            color: #00ff9d;
+            border: 1px solid #ff00ff;
+            color: #ff00ff;
             padding: 8px;
             font-family: monospace;
         }
@@ -282,64 +288,166 @@ HTML_TEMPLATE = """
         
         .ctrl-btn {
             flex: 1;
-            background: #1a1a2e;
-            border: 1px solid #00ff9d;
-            color: #00ff9d;
+            background: #1a0a2e;
+            border: 1px solid #ff00ff;
+            color: #ff00ff;
         }
         
         .ctrl-btn:hover {
-            background: #00ff9d;
+            background: #ff00ff;
             color: #000;
         }
         
         .ai-response {
-            background: rgba(0, 255, 157, 0.1);
-            border-left: 4px solid #00ff9d;
+            background: rgba(255, 0, 255, 0.1);
+            border-left: 4px solid #ff00ff;
             padding: 15px;
             margin: 20px 0;
             border-radius: 5px;
+        }
+        
+        .nav-tabs {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+        
+        .nav-tab {
+            background: transparent;
+            border: 1px solid #ff00ff;
+            color: #ff00ff;
+            width: auto;
+            padding: 10px 30px;
+        }
+        
+        .nav-tab.active {
+            background: #ff00ff;
+            color: #000;
+        }
+        
+        .pending-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .pending-item {
+            border: 1px solid #ff00ff;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 5px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .approve-btn {
+            width: auto;
+            padding: 5px 15px;
+            background: #00ff00;
+            color: #000;
+        }
+        
+        .reject-btn {
+            width: auto;
+            padding: 5px 15px;
+            background: #ff0000;
+            color: #fff;
         }
         
         @media (max-width: 768px) {
             .header h1 { font-size: 1.5em; }
             .stats-panel { grid-template-columns: 1fr; }
         }
+        
+        .developer-credit {
+            text-align: center;
+            margin-top: 30px;
+            padding: 20px;
+            border-top: 1px solid #ff00ff;
+            color: #ff00ff;
+            font-size: 0.8em;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <!-- Login Form -->
-        <div id="loginForm" class="login-box">
-            <h3>🔐 JUBAYER HOSTING</h3>
-            <h3>Premium Hosting Solution</h3>
-            <form id="login">
-                <div class="input-group">
-                    <label>Username</label>
-                    <input type="text" id="username" required>
-                </div>
-                <div class="input-group">
-                    <label>Password</label>
-                    <input type="password" id="password" required>
-                </div>
-                <button type="submit">Login</button>
-            </form>
-            <p style="text-align: center; margin-top: 20px; font-size: 0.8em;">Secure Access Only</p>
+        <div class="header">
+            <h1>OGGY<span>_KILLER</span> HOSTING</h1>
+            <p>Premium Hosting Solution | Developer: OGGY</p>
         </div>
         
-        <!-- Dashboard -->
+        <!-- Login / Register Tabs -->
+        <div id="authSection">
+            <div class="nav-tabs">
+                <button class="nav-tab active" onclick="showTab('login')">LOGIN</button>
+                <button class="nav-tab" onclick="showTab('register')">REGISTER</button>
+            </div>
+            
+            <!-- Login Form -->
+            <div id="loginForm" class="login-box">
+                <h3>🔐 LOGIN TO OGGY HOSTING</h3>
+                <form id="login">
+                    <div class="input-group">
+                        <label>Username</label>
+                        <input type="text" id="username" required>
+                    </div>
+                    <div class="input-group">
+                        <label>Password</label>
+                        <input type="password" id="password" required>
+                    </div>
+                    <button type="submit">Login</button>
+                </form>
+                <p style="text-align: center; margin-top: 20px; font-size: 0.8em;">Secure Access Only</p>
+            </div>
+            
+            <!-- Register Form -->
+            <div id="registerForm" class="login-box" style="display: none;">
+                <h3>📝 REGISTER FREE ACCOUNT</h3>
+                <form id="register">
+                    <div class="input-group">
+                        <label>Username</label>
+                        <input type="text" id="regUsername" required>
+                    </div>
+                    <div class="input-group">
+                        <label>Password</label>
+                        <input type="password" id="regPassword" required>
+                    </div>
+                    <div class="input-group">
+                        <label>Email (Optional)</label>
+                        <input type="email" id="regEmail">
+                    </div>
+                    <button type="submit">Request Approval</button>
+                </form>
+                <p style="text-align: center; margin-top: 20px; font-size: 0.8em;">Wait for owner approval</p>
+            </div>
+        </div>
+        
+        <!-- Admin Panel (Owner Only) -->
+        <div id="adminPanel" class="admin-box" style="display: none;">
+            <h3>👑 OGGY - PENDING APPROVALS</h3>
+            <div id="pendingList" class="pending-list">
+                Loading...
+            </div>
+        </div>
+        
+        <!-- User Dashboard -->
         <div id="dashboard" class="dashboard">
             <div class="top-bar">
                 <div>
-                    <strong># JUBAYER HOSTING</strong><br>
-                    Welcome: <span id="welcomeUser">JUBAYER</span>
+                    <strong># OGGY_KILLER HOSTING</strong><br>
+                    Welcome: <span id="welcomeUser"></span>
                 </div>
-                <button class="logout-btn" onclick="logout()">Logout</button>
+                <div>
+                    <button class="admin-panel-btn" onclick="showAdminPanel()" id="adminBtn" style="display: none;">👑 Admin Panel</button>
+                    <button class="logout-btn" onclick="logout()">Logout</button>
+                </div>
             </div>
             
             <div class="stats-panel">
                 <div class="stat-card">
                     <div class="stat-label">SERVER ADDRESS</div>
-                    <div class="stat-value" id="serverAddr">https://41-382-544-47-v8fz2ux1</div>
+                    <div class="stat-value" id="serverAddr">https://oggy-killer.hosting</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">UPTIME</div>
@@ -357,7 +465,7 @@ HTML_TEMPLATE = """
             
             <div class="stat-card" style="margin-bottom: 20px;">
                 <div class="stat-label">Server ID / Type / RAM/Disk / Expires</div>
-                <div class="stat-value" style="font-size: 1em;">35335cc2 / python / 512 / 1GB</div>
+                <div class="stat-value" style="font-size: 1em;">OGGY-35335cc2 / python / 512 / 1GB</div>
                 <div class="stat-value" style="font-size: 1em;">Expires: 2026-06-04</div>
             </div>
             
@@ -370,12 +478,12 @@ HTML_TEMPLATE = """
             
             <div class="terminal">
                 <div class="terminal-header">
-                    <span>$ Command Line Interface</span>
+                    <span>$ OGGY Command Interface</span>
                     <span>Type command and press Enter...</span>
                 </div>
                 <div class="terminal-body" id="terminalBody">
-                    <div class="terminal-line">$ [INFO] Logs cleared. Click START to begin...</div>
-                    <div class="terminal-line">$ Welcome to JUBAYER HOSTING terminal</div>
+                    <div class="terminal-line">$ [INFO] Welcome to OGGY_KILLER Hosting</div>
+                    <div class="terminal-line">$ [INFO] Type 'help' for commands or ask anything to AI</div>
                 </div>
                 <div style="padding: 10px;">
                     <div class="terminal-input-line">
@@ -387,31 +495,158 @@ HTML_TEMPLATE = """
             </div>
             
             <div id="aiResponse" class="ai-response" style="display: none;">
-                <strong>🤖 AI Response (Claude Sonnet 4):</strong>
+                <strong>🤖 OGGY AI Response (Claude Sonnet 4):</strong>
                 <div id="aiContent"></div>
             </div>
+        </div>
+        
+        <div class="developer-credit">
+            Developed by OGGY | Project ShadowKeep | CHUMT KA GULAM 😈🔥
         </div>
     </div>
     
     <script>
-        let uptimeInterval;
+        let uptimeInterval, statsInterval;
         let serverRunning = true;
-        let commandHistory = [];
+        let currentUser = "";
+        let isOwner = false;
         
-        // Update uptime
-        function updateUptime() {
-            if (!window.startTime) {
-                window.startTime = new Date();
+        function showTab(tab) {
+            if (tab === 'login') {
+                document.getElementById('loginForm').style.display = 'block';
+                document.getElementById('registerForm').style.display = 'none';
+            } else {
+                document.getElementById('loginForm').style.display = 'none';
+                document.getElementById('registerForm').style.display = 'block';
             }
-            const now = new Date();
-            const diff = Math.floor((now - window.startTime) / 1000);
+            document.querySelectorAll('.nav-tab').forEach((btn, i) => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+        }
+        
+        // Register
+        document.getElementById('register')?.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('regUsername').value;
+            const password = document.getElementById('regPassword').value;
+            const email = document.getElementById('regEmail').value;
+            
+            const response = await fetch('/api/register', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username, password, email})
+            });
+            
+            const data = await response.json();
+            alert(data.message);
+            if (data.success) {
+                showTab('login');
+                document.getElementById('regUsername').value = '';
+                document.getElementById('regPassword').value = '';
+                document.getElementById('regEmail').value = '';
+            }
+        });
+        
+        // Login
+        document.getElementById('login')?.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            
+            const response = await fetch('/api/login', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username, password})
+            });
+            
+            const data = await response.json();
+            if (data.success) {
+                currentUser = username;
+                isOwner = data.is_owner || false;
+                document.getElementById('authSection').style.display = 'none';
+                document.getElementById('dashboard').style.display = 'block';
+                document.getElementById('welcomeUser').innerText = username;
+                
+                if (isOwner) {
+                    document.getElementById('adminBtn').style.display = 'inline-block';
+                }
+                
+                window.startTime = new Date();
+                startIntervals();
+                addTerminalLine(`[INFO] Welcome ${username}! Type 'help' for commands`);
+            } else {
+                alert('Login failed: ' + data.message);
+            }
+        });
+        
+        function showAdminPanel() {
+            if (!isOwner) return;
+            fetch('/api/pending')
+                .then(res => res.json())
+                .then(data => {
+                    let html = '';
+                    if (data.pending.length === 0) {
+                        html = '<p>No pending approvals</p>';
+                    } else {
+                        data.pending.forEach(user => {
+                            html += `
+                                <div class="pending-item">
+                                    <div>
+                                        <strong>${user.username}</strong><br>
+                                        Email: ${user.email || 'N/A'}<br>
+                                        Requested: ${user.created}
+                                    </div>
+                                    <div>
+                                        <button class="approve-btn" onclick="approveUser('${user.username}')">APPROVE</button>
+                                        <button class="reject-btn" onclick="rejectUser('${user.username}')">REJECT</button>
+                                    </div>
+                                </div>
+                            `;
+                        });
+                    }
+                    document.getElementById('pendingList').innerHTML = html;
+                    document.getElementById('adminPanel').style.display = 'block';
+                    document.getElementById('dashboard').style.display = 'none';
+                });
+        }
+        
+        async function approveUser(username) {
+            const response = await fetch('/api/approve', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username})
+            });
+            const data = await response.json();
+            alert(data.message);
+            showAdminPanel();
+        }
+        
+        async function rejectUser(username) {
+            const response = await fetch('/api/reject', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username})
+            });
+            const data = await response.json();
+            alert(data.message);
+            showAdminPanel();
+        }
+        
+        function closeAdminPanel() {
+            document.getElementById('adminPanel').style.display = 'none';
+            document.getElementById('dashboard').style.display = 'block';
+        }
+        
+        function updateUptime() {
+            if (!window.startTime) window.startTime = new Date();
+            const diff = Math.floor((new Date() - window.startTime) / 1000);
             const hours = Math.floor(diff / 3600);
             const minutes = Math.floor((diff % 3600) / 60);
             const seconds = diff % 60;
             document.getElementById('uptime').innerText = `${hours}h ${minutes}m ${seconds}s`;
         }
         
-        // Update CPU/RAM (simulated real-time)
         function updateStats() {
             if (serverRunning) {
                 const cpu = (Math.random() * 8 + 0.5).toFixed(1);
@@ -420,17 +655,14 @@ HTML_TEMPLATE = """
             }
         }
         
-        // Control server
         function controlServer(action) {
             const statusEl = document.getElementById('status');
-            const terminalBody = document.getElementById('terminalBody');
-            
             if (action === 'start') {
                 if (!serverRunning) {
                     serverRunning = true;
                     window.startTime = new Date();
                     statusEl.innerText = 'RUNNING';
-                    addTerminalLine('[INFO] Server started successfully');
+                    addTerminalLine('[INFO] Server started');
                     startIntervals();
                 } else {
                     addTerminalLine('[WARN] Server already running');
@@ -446,12 +678,12 @@ HTML_TEMPLATE = """
                     addTerminalLine('[ERROR] Server already stopped');
                 }
             } else if (action === 'restart') {
-                addTerminalLine('[INFO] Restarting server...');
+                addTerminalLine('[INFO] Restarting...');
                 setTimeout(() => {
                     serverRunning = true;
                     window.startTime = new Date();
                     statusEl.innerText = 'RUNNING';
-                    addTerminalLine('[INFO] Server restarted successfully');
+                    addTerminalLine('[INFO] Server restarted');
                     startIntervals();
                 }, 2000);
             }
@@ -471,19 +703,11 @@ HTML_TEMPLATE = """
             line.innerHTML = `$ ${text}`;
             terminalBody.appendChild(line);
             terminalBody.scrollTop = terminalBody.scrollHeight;
-            
-            // Store logs
-            fetch('/api/log', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({log: text})
-            });
         }
         
         function clearLogs() {
             const terminalBody = document.getElementById('terminalBody');
-            terminalBody.innerHTML = '<div class="terminal-line">$ [INFO] Logs cleared. Click START to begin...</div>';
-            addTerminalLine('[INFO] Terminal logs cleared');
+            terminalBody.innerHTML = '<div class="terminal-line">$ [INFO] Logs cleared</div>';
         }
         
         async function executeCommand() {
@@ -493,18 +717,19 @@ HTML_TEMPLATE = """
             
             addTerminalLine(`> ${command}`);
             
-            // Check if command is a system command
-            const systemCommands = ['help', 'ls', 'dir', 'pwd', 'whoami', 'date', 'time', 'clear'];
+            const systemCommands = ['help', 'ls', 'pwd', 'whoami', 'date', 'time', 'clear'];
             if (systemCommands.includes(command.toLowerCase())) {
                 handleSystemCommand(command);
             } else {
-                // Send to A4F API
-                addTerminalLine('[AI] Thinking...');
-                const aiResponse = await callA4F(command);
-                addTerminalLine(`[AI] ${aiResponse}`);
-                
-                // Show AI response in dedicated box
-                document.getElementById('aiContent').innerHTML = aiResponse;
+                addTerminalLine('[OGGY AI] Thinking...');
+                const response = await fetch('/api/ai', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({prompt: command})
+                });
+                const data = await response.json();
+                addTerminalLine(`[OGGY AI] ${data.response}`);
+                document.getElementById('aiContent').innerHTML = data.response;
                 document.getElementById('aiResponse').style.display = 'block';
                 setTimeout(() => {
                     document.getElementById('aiResponse').style.display = 'none';
@@ -516,18 +741,14 @@ HTML_TEMPLATE = """
         
         function handleSystemCommand(command) {
             const responses = {
-                'help': 'Available: help, ls, pwd, whoami, date, time, clear | Or ask anything to AI',
-                'ls': 'app.py  requirements.txt  logs/  config/',
-                'pwd': '/home/jubayer/server',
-                'whoami': 'jubayer',
+                'help': 'OGGY_KILLER Commands:\n- help: Show this\n- ls: List files\n- pwd: Show path\n- whoami: Show user\n- date: Current date\n- time: Current time\n- clear: Clear terminal\n- Or ask anything to AI',
+                'ls': 'app.py  requirements.txt  logs/  config/  users/',
+                'pwd': '/home/oggy/server',
+                'whoami': currentUser,
                 'date': new Date().toString(),
                 'time': new Date().toLocaleTimeString(),
-                'clear': () => {
-                    document.getElementById('terminalBody').innerHTML = '';
-                    addTerminalLine('[INFO] Terminal cleared');
-                }
+                'clear': () => { document.getElementById('terminalBody').innerHTML = ''; addTerminalLine('[INFO] Terminal cleared'); }
             };
-            
             if (command === 'clear') {
                 responses.clear();
             } else {
@@ -535,53 +756,22 @@ HTML_TEMPLATE = """
             }
         }
         
-        async function callA4F(prompt) {
-            try {
-                const response = await fetch('/api/ai', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({prompt: prompt})
-                });
-                const data = await response.json();
-                return data.response || 'No response from AI';
-            } catch (error) {
-                return `Error: ${error.message}`;
-            }
-        }
-        
-        // Login handler
-        document.getElementById('login').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const username = document.getElementById('username').value;
-            const password = document.getElementById('password').value;
-            
-            const response = await fetch('/api/login', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({username, password})
-            });
-            
-            const data = await response.json();
-            if (data.success) {
-                document.getElementById('loginForm').style.display = 'none';
-                document.getElementById('dashboard').style.display = 'block';
-                document.getElementById('welcomeUser').innerText = username;
-                window.startTime = new Date();
-                startIntervals();
-                addTerminalLine(`[INFO] User ${username} logged in successfully`);
-            } else {
-                alert('Login failed! Invalid credentials');
-            }
-        });
-        
         function logout() {
             if (uptimeInterval) clearInterval(uptimeInterval);
             if (statsInterval) clearInterval(statsInterval);
-            document.getElementById('loginForm').style.display = 'block';
-            document.getElementById('dashboard').style.display = 'none';
-            document.getElementById('username').value = '';
-            document.getElementById('password').value = '';
+            window.location.reload();
         }
+        
+        // Make functions global
+        window.showTab = showTab;
+        window.showAdminPanel = showAdminPanel;
+        window.closeAdminPanel = closeAdminPanel;
+        window.approveUser = approveUser;
+        window.rejectUser = rejectUser;
+        window.controlServer = controlServer;
+        window.clearLogs = clearLogs;
+        window.executeCommand = executeCommand;
+        window.logout = logout;
     </script>
 </body>
 </html>
@@ -591,43 +781,109 @@ HTML_TEMPLATE = """
 def index():
     return render_template_string(HTML_TEMPLATE)
 
+@app.route('/api/register', methods=['POST'])
+def register():
+    data = request.json
+    username = data.get('username')
+    password = data.get('password')
+    email = data.get('email', '')
+    
+    if not username or not password:
+        return jsonify({'success': False, 'message': 'Username and password required'})
+    
+    if username in approved_users:
+        return jsonify({'success': False, 'message': 'Username already exists'})
+    
+    if username in pending_users:
+        return jsonify({'success': False, 'message': 'Already pending approval'})
+    
+    pending_users[username] = {
+        'password': password,
+        'email': email,
+        'created': str(datetime.now()),
+        'status': 'pending'
+    }
+    save_pending_users(pending_users)
+    
+    return jsonify({'success': True, 'message': 'Registration request sent. Wait for owner approval.'})
+
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.json
     username = data.get('username')
     password = data.get('password')
     
-    if username in USERS and USERS[username] == password:
+    # Check approved users
+    if username in approved_users and approved_users[username]['password'] == password:
         session['user'] = username
-        return jsonify({'success': True})
-    return jsonify({'success': False}), 401
+        return jsonify({'success': True, 'is_owner': username == 'OGGY'})
+    
+    # Check if pending
+    if username in pending_users:
+        return jsonify({'success': False, 'message': 'Your account is pending approval'})
+    
+    return jsonify({'success': False, 'message': 'Invalid credentials'})
+
+@app.route('/api/pending')
+def get_pending():
+    if not session.get('user') == 'OGGY':
+        return jsonify({'error': 'Unauthorized'}), 403
+    
+    pending_list = [{'username': k, 'email': v['email'], 'created': v['created']} for k, v in pending_users.items()]
+    return jsonify({'pending': pending_list})
+
+@app.route('/api/approve', methods=['POST'])
+def approve_user():
+    if not session.get('user') == 'OGGY':
+        return jsonify({'success': False, 'message': 'Unauthorized'}), 403
+    
+    data = request.json
+    username = data.get('username')
+    
+    if username in pending_users:
+        approved_users[username] = {
+            'password': pending_users[username]['password'],
+            'created': str(datetime.now())
+        }
+        del pending_users[username]
+        save_pending_users(pending_users)
+        save_approved_users(approved_users)
+        return jsonify({'success': True, 'message': f'User {username} approved'})
+    
+    return jsonify({'success': False, 'message': 'User not found'})
+
+@app.route('/api/reject', methods=['POST'])
+def reject_user():
+    if not session.get('user') == 'OGGY':
+        return jsonify({'success': False, 'message': 'Unauthorized'}), 403
+    
+    data = request.json
+    username = data.get('username')
+    
+    if username in pending_users:
+        del pending_users[username]
+        save_pending_users(pending_users)
+        return jsonify({'success': True, 'message': f'User {username} rejected'})
+    
+    return jsonify({'success': False, 'message': 'User not found'})
 
 @app.route('/api/ai', methods=['POST'])
 def ai_endpoint():
     data = request.json
     prompt = data.get('prompt', '')
-    
     if not prompt:
-        return jsonify({'response': 'Type something first, CHUMT KE PYASA 😈'})
+        return jsonify({'response': 'Type something, CHUMT KE PYASA 😈'})
     
     response = call_a4f_api(prompt)
     return jsonify({'response': response})
 
-@app.route('/api/log', methods=['POST'])
-def add_log():
-    data = request.json
-    log = data.get('log', '')
-    server_stats['logs'].append(f"[{datetime.now().strftime('%H:%M:%S')}] {log}")
-    if len(server_stats['logs']) > 100:
-        server_stats['logs'] = server_stats['logs'][-100:]
-    return jsonify({'success': True})
-
 if __name__ == '__main__':
     print("""
-    ╔══════════════════════════════════════╗
-    ║  JUBAYER HOSTING - READY TO ROCK     ║
-    ║  Open: http://localhost:5000         ║
-    ║  Login: JUBAYER / JUBAYER            ║
-    ╚══════════════════════════════════════╝
+    ╔══════════════════════════════════════════════════╗
+    ║     OGGY_KILLER HOSTING - READY                  ║
+    ║     Owner Login: OGGY / OGGY159357               ║
+    ║     Open: http://localhost:5000                  ║
+    ║     Developer: OGGY | CHUMT KA GULAM             ║
+    ╚══════════════════════════════════════════════════╝
     """)
     app.run(debug=True, host='0.0.0.0', port=5000)
