@@ -2,46 +2,57 @@ from flask import Flask, render_template_string, request, jsonify, session, redi
 import requests
 import time
 import random
-import os
 import json
+import os
 from datetime import datetime, timedelta
-from threading import Thread
+from threading import Lock
 
 app = Flask(__name__)
-app.secret_key = "oggy_secret_key_159357_oggy_killer"
+app.secret_key = "oggy_hosting_secret_159357"
 
 # A4F API Configuration
 A4F_API_URL = "https://samuraiapi.in/v1/chat/completions"
 A4F_API_KEY = "sk-NK6SS9tpWghyFJwkZLoCis1sMaF6RwQ5WF09mUoKKR0VKCm7"
 A4F_MODEL = "provider10-claude-sonnet-4-20250514(clinesp)"
 
-# File to store pending approvals
-PENDING_FILE = "pending_users.json"
-APPROVED_FILE = "approved_users.json"
+# File for storing data
+USERS_FILE = "users.json"
+REQUESTS_FILE = "requests.json"
 
-def load_pending_users():
-    if os.path.exists(PENDING_FILE):
-        with open(PENDING_FILE, 'r') as f:
+# Load/Save functions
+def load_users():
+    if os.path.exists(USERS_FILE):
+        with open(USERS_FILE, 'r') as f:
             return json.load(f)
-    return {}
+    return {"OGGY": {"password": "OGGY@123", "role": "owner", "approved": True, "created_at": str(datetime.now())}}
 
-def save_pending_users(users):
-    with open(PENDING_FILE, 'w') as f:
+def save_users(users):
+    with open(USERS_FILE, 'w') as f:
         json.dump(users, f, indent=2)
 
-def load_approved_users():
-    if os.path.exists(APPROVED_FILE):
-        with open(APPROVED_FILE, 'r') as f:
+def load_requests():
+    if os.path.exists(REQUESTS_FILE):
+        with open(REQUESTS_FILE, 'r') as f:
             return json.load(f)
-    return {"OGGY": {"password": "OGGY159357", "created": str(datetime.now())}}
+    return []
 
-def save_approved_users(users):
-    with open(APPROVED_FILE, 'w') as f:
-        json.dump(users, f, indent=2)
+def save_requests(requests):
+    with open(REQUESTS_FILE, 'w') as f:
+        json.dump(requests, f, indent=2)
 
-# Load data
-pending_users = load_pending_users()
-approved_users = load_approved_users()
+# Mock server stats for each user
+user_servers = {}
+
+def get_server_stats(username):
+    if username not in user_servers:
+        user_servers[username] = {
+            "start_time": datetime.now(),
+            "is_running": True,
+            "cpu_usage": 0.5,
+            "ram_usage": 256,
+            "logs": ["[INFO] OGGY HOSTING online", f"[INFO] Welcome {username}"]
+        }
+    return user_servers[username]
 
 def call_a4f_api(prompt):
     headers = {
@@ -58,11 +69,11 @@ def call_a4f_api(prompt):
         response = requests.post(A4F_API_URL, headers=headers, json=payload, timeout=30)
         if response.status_code == 200:
             data = response.json()
-            return data.get("choices", [{}])[0].get("message", {}).get("content", "No response")
+            return data.get("choices", [{}])[0].get("message", {}).get("content", "No response from AI")
         else:
             return f"API Error: {response.status_code}"
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Connection Error: {str(e)}"
 
 # HTML Template
 HTML_TEMPLATE = """
@@ -71,7 +82,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OGGY HOSTING - Premium Solution</title>
+    <title>OGGY HOSTING - Premium OGGY Solution</title>
     <style>
         * {
             margin: 0;
@@ -80,8 +91,8 @@ HTML_TEMPLATE = """
         }
         
         body {
-            background: linear-gradient(135deg, #0a0a0a 0%, #1a0a2e 100%);
-            font-family: 'Courier New', monospace;
+            background: linear-gradient(135deg, #0a0a0a 0%, #1a0033 100%);
+            font-family: 'Courier New', 'Fira Code', monospace;
             min-height: 100vh;
             color: #ff00ff;
         }
@@ -110,24 +121,15 @@ HTML_TEMPLATE = """
             letter-spacing: 3px;
         }
         
-        .header h1 span {
-            color: #00ff00;
-        }
-        
-        .header p {
-            color: #ff00ff;
-            opacity: 0.8;
-            margin-top: 10px;
-        }
-        
-        .login-box, .register-box, .admin-box {
-            background: rgba(0, 0, 0, 0.85);
+        .login-box, .register-box, .approval-box {
+            background: rgba(0, 0, 0, 0.95);
             border: 2px solid #ff00ff;
             border-radius: 15px;
             padding: 40px;
             max-width: 500px;
-            margin: 20px auto;
+            margin: 50px auto;
             backdrop-filter: blur(10px);
+            box-shadow: 0 0 50px rgba(255, 0, 255, 0.3);
         }
         
         .input-group {
@@ -192,15 +194,15 @@ HTML_TEMPLATE = """
             align-items: center;
         }
         
-        .logout-btn, .admin-panel-btn {
+        .logout-btn, .owner-btn {
             width: auto;
             padding: 8px 20px;
             background: #ff0040;
-            margin-left: 10px;
         }
         
-        .admin-panel-btn {
-            background: #ff8800;
+        .owner-btn {
+            background: #00ff9d;
+            color: #000;
         }
         
         .stats-panel {
@@ -247,8 +249,6 @@ HTML_TEMPLATE = """
             color: #000;
             padding: 10px;
             font-weight: bold;
-            display: flex;
-            justify-content: space-between;
         }
         
         .terminal-body {
@@ -268,6 +268,7 @@ HTML_TEMPLATE = """
             display: flex;
             gap: 10px;
             margin-top: 10px;
+            padding: 10px;
         }
         
         .terminal-input {
@@ -288,7 +289,7 @@ HTML_TEMPLATE = """
         
         .ctrl-btn {
             flex: 1;
-            background: #1a0a2e;
+            background: #1a0033;
             border: 1px solid #ff00ff;
             color: #ff00ff;
         }
@@ -298,148 +299,109 @@ HTML_TEMPLATE = """
             color: #000;
         }
         
-        .ai-response {
+        .request-card {
             background: rgba(255, 0, 255, 0.1);
-            border-left: 4px solid #ff00ff;
-            padding: 15px;
-            margin: 20px 0;
-            border-radius: 5px;
-        }
-        
-        .nav-tabs {
-            display: flex;
-            gap: 10px;
-            justify-content: center;
-            margin-bottom: 20px;
-        }
-        
-        .nav-tab {
-            background: transparent;
             border: 1px solid #ff00ff;
-            color: #ff00ff;
-            width: auto;
-            padding: 10px 30px;
-        }
-        
-        .nav-tab.active {
-            background: #ff00ff;
-            color: #000;
-        }
-        
-        .pending-list {
-            max-height: 400px;
-            overflow-y: auto;
-        }
-        
-        .pending-item {
-            border: 1px solid #ff00ff;
+            border-radius: 10px;
             padding: 15px;
             margin: 10px 0;
-            border-radius: 5px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
         }
         
         .approve-btn {
             width: auto;
             padding: 5px 15px;
-            background: #00ff00;
+            margin: 5px;
+            background: #00ff9d;
             color: #000;
         }
         
         .reject-btn {
-            width: auto;
-            padding: 5px 15px;
-            background: #ff0000;
-            color: #fff;
+            background: #ff0040;
+        }
+        
+        .footer {
+            text-align: center;
+            padding: 20px;
+            margin-top: 40px;
+            border-top: 1px solid #ff00ff;
+            font-size: 0.9em;
+            opacity: 0.7;
         }
         
         @media (max-width: 768px) {
             .header h1 { font-size: 1.5em; }
             .stats-panel { grid-template-columns: 1fr; }
         }
-        
-        .developer-credit {
-            text-align: center;
-            margin-top: 30px;
-            padding: 20px;
-            border-top: 1px solid #ff00ff;
-            color: #ff00ff;
-            font-size: 0.8em;
-        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>OGGY<span>_KILLER</span> HOSTING</h1>
-            <p>Premium Hosting Solution | Developer: OGGY</p>
+            <h1>🔥 OGGY HOSTING 🔥</h1>
+            <p>Premium Hosting Solution | By OGGY</p>
         </div>
         
-        <!-- Login / Register Tabs -->
-        <div id="authSection">
-            <div class="nav-tabs">
-                <button class="nav-tab active" onclick="showTab('login')">LOGIN</button>
-                <button class="nav-tab" onclick="showTab('register')">REGISTER</button>
-            </div>
-            
-            <!-- Login Form -->
-            <div id="loginForm" class="login-box">
-                <h3>🔐 LOGIN TO OGGY HOSTING</h3>
-                <form id="login">
-                    <div class="input-group">
-                        <label>Username</label>
-                        <input type="text" id="username" required>
-                    </div>
-                    <div class="input-group">
-                        <label>Password</label>
-                        <input type="password" id="password" required>
-                    </div>
-                    <button type="submit">Login</button>
-                </form>
-                <p style="text-align: center; margin-top: 20px; font-size: 0.8em;">Secure Access Only</p>
-            </div>
-            
-            <!-- Register Form -->
-            <div id="registerForm" class="login-box" style="display: none;">
-                <h3>📝 REGISTER FREE ACCOUNT</h3>
-                <form id="register">
-                    <div class="input-group">
-                        <label>Username</label>
-                        <input type="text" id="regUsername" required>
-                    </div>
-                    <div class="input-group">
-                        <label>Password</label>
-                        <input type="password" id="regPassword" required>
-                    </div>
-                    <div class="input-group">
-                        <label>Email (Optional)</label>
-                        <input type="email" id="regEmail">
-                    </div>
-                    <button type="submit">Request Approval</button>
-                </form>
-                <p style="text-align: center; margin-top: 20px; font-size: 0.8em;">Wait for owner approval</p>
-            </div>
+        <!-- Login Form -->
+        <div id="loginForm" class="login-box">
+            <h3>🔐 LOGIN TO OGGY HOSTING</h3>
+            <form id="login">
+                <div class="input-group">
+                    <label>Username</label>
+                    <input type="text" id="username" required>
+                </div>
+                <div class="input-group">
+                    <label>Password</label>
+                    <input type="password" id="password" required>
+                </div>
+                <button type="submit">Login</button>
+            </form>
+            <p style="text-align: center; margin-top: 20px;">
+                <a href="#" onclick="showRegister()" style="color: #ff00ff;">Create Free Account</a>
+            </p>
         </div>
         
-        <!-- Admin Panel (Owner Only) -->
-        <div id="adminPanel" class="admin-box" style="display: none;">
-            <h3>👑 OGGY - PENDING APPROVALS</h3>
-            <div id="pendingList" class="pending-list">
-                Loading...
-            </div>
+        <!-- Register Form -->
+        <div id="registerForm" class="register-box" style="display: none;">
+            <h3>📝 CREATE FREE ACCOUNT</h3>
+            <p style="margin-bottom: 20px;">Request will be sent to OGGY for approval</p>
+            <form id="register">
+                <div class="input-group">
+                    <label>Username</label>
+                    <input type="text" id="regUsername" required>
+                </div>
+                <div class="input-group">
+                    <label>Password</label>
+                    <input type="password" id="regPassword" required>
+                </div>
+                <div class="input-group">
+                    <label>Email (optional)</label>
+                    <input type="email" id="regEmail">
+                </div>
+                <button type="submit">Send Request</button>
+            </form>
+            <p style="text-align: center; margin-top: 20px;">
+                <a href="#" onclick="showLogin()" style="color: #ff00ff;">Back to Login</a>
+            </p>
+        </div>
+        
+        <!-- Owner Approval Panel -->
+        <div id="approvalPanel" class="approval-box" style="display: none;">
+            <h3>👑 OWNER - PENDING REQUESTS</h3>
+            <div id="requestsList"></div>
+            <p style="text-align: center; margin-top: 20px;">
+                <a href="#" onclick="showLogin()" style="color: #ff00ff;">Back to Login</a>
+            </p>
         </div>
         
         <!-- User Dashboard -->
         <div id="dashboard" class="dashboard">
             <div class="top-bar">
                 <div>
-                    <strong># OGGY_KILLER HOSTING</strong><br>
+                    <strong># OGGY HOSTING</strong><br>
                     Welcome: <span id="welcomeUser"></span>
                 </div>
                 <div>
-                    <button class="admin-panel-btn" onclick="showAdminPanel()" id="adminBtn" style="display: none;">👑 Admin Panel</button>
+                    <button class="owner-btn" id="ownerPanelBtn" onclick="showOwnerPanel()" style="display: none;">👑 Owner Panel</button>
                     <button class="logout-btn" onclick="logout()">Logout</button>
                 </div>
             </div>
@@ -447,7 +409,7 @@ HTML_TEMPLATE = """
             <div class="stats-panel">
                 <div class="stat-card">
                     <div class="stat-label">SERVER ADDRESS</div>
-                    <div class="stat-value" id="serverAddr">https://oggy-killer.hosting</div>
+                    <div class="stat-value">https://oggy-host-41-382-544-47</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">UPTIME</div>
@@ -465,7 +427,7 @@ HTML_TEMPLATE = """
             
             <div class="stat-card" style="margin-bottom: 20px;">
                 <div class="stat-label">Server ID / Type / RAM/Disk / Expires</div>
-                <div class="stat-value" style="font-size: 1em;">OGGY-35335cc2 / python / 512 / 1GB</div>
+                <div class="stat-value" style="font-size: 1em;">oggy-35335cc2 / python / 512 / 1GB</div>
                 <div class="stat-value" style="font-size: 1em;">Expires: 2026-06-04</div>
             </div>
             
@@ -478,30 +440,27 @@ HTML_TEMPLATE = """
             
             <div class="terminal">
                 <div class="terminal-header">
-                    <span>$ OGGY Command Interface</span>
-                    <span>Type command and press Enter...</span>
+                    <span>$ OGGY TERMINAL - Type command or ask AI</span>
                 </div>
                 <div class="terminal-body" id="terminalBody">
-                    <div class="terminal-line">$ [INFO] Welcome to OGGY_KILLER Hosting</div>
-                    <div class="terminal-line">$ [INFO] Type 'help' for commands or ask anything to AI</div>
+                    <div class="terminal-line">$ [INFO] Welcome to OGGY HOSTING</div>
+                    <div class="terminal-line">$ Type 'help' for commands or ask anything to AI</div>
                 </div>
-                <div style="padding: 10px;">
-                    <div class="terminal-input-line">
-                        <span>$</span>
-                        <input type="text" id="commandInput" class="terminal-input" placeholder="Type command or ask AI...">
-                        <button onclick="executeCommand()" style="width: auto; padding: 5px 15px;">⏎</button>
-                    </div>
+                <div class="terminal-input-line">
+                    <span style="color: #ff00ff;">$</span>
+                    <input type="text" id="commandInput" class="terminal-input" placeholder="Type command or ask AI..." onkeypress="if(event.key==='Enter') executeCommand()">
+                    <button onclick="executeCommand()" style="width: auto; padding: 5px 15px;">⏎</button>
                 </div>
             </div>
             
-            <div id="aiResponse" class="ai-response" style="display: none;">
-                <strong>🤖 OGGY AI Response (Claude Sonnet 4):</strong>
-                <div id="aiContent"></div>
+            <div id="aiResponse" class="stat-card" style="display: none; background: rgba(255,0,255,0.1);">
+                <strong>🤖 AI Response (OGGY AI - Claude):</strong>
+                <div id="aiContent" style="margin-top: 10px;"></div>
             </div>
         </div>
         
-        <div class="developer-credit">
-            Developed by OGGY | Project ShadowKeep | CHUMT KA GULAM 😈🔥
+        <div class="footer">
+            Developed by OGGY 🔥 | OGGY HOSTING v2.0
         </div>
     </div>
     
@@ -509,142 +468,23 @@ HTML_TEMPLATE = """
         let uptimeInterval, statsInterval;
         let serverRunning = true;
         let currentUser = "";
-        let isOwner = false;
         
-        function showTab(tab) {
-            if (tab === 'login') {
-                document.getElementById('loginForm').style.display = 'block';
-                document.getElementById('registerForm').style.display = 'none';
-            } else {
-                document.getElementById('loginForm').style.display = 'none';
-                document.getElementById('registerForm').style.display = 'block';
-            }
-            document.querySelectorAll('.nav-tab').forEach((btn, i) => {
-                btn.classList.remove('active');
-            });
-            event.target.classList.add('active');
+        function showRegister() {
+            document.getElementById('loginForm').style.display = 'none';
+            document.getElementById('registerForm').style.display = 'block';
+            document.getElementById('approvalPanel').style.display = 'none';
         }
         
-        // Register
-        document.getElementById('register')?.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const username = document.getElementById('regUsername').value;
-            const password = document.getElementById('regPassword').value;
-            const email = document.getElementById('regEmail').value;
-            
-            const response = await fetch('/api/register', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({username, password, email})
-            });
-            
-            const data = await response.json();
-            alert(data.message);
-            if (data.success) {
-                showTab('login');
-                document.getElementById('regUsername').value = '';
-                document.getElementById('regPassword').value = '';
-                document.getElementById('regEmail').value = '';
-            }
-        });
-        
-        // Login
-        document.getElementById('login')?.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const username = document.getElementById('username').value;
-            const password = document.getElementById('password').value;
-            
-            const response = await fetch('/api/login', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({username, password})
-            });
-            
-            const data = await response.json();
-            if (data.success) {
-                currentUser = username;
-                isOwner = data.is_owner || false;
-                document.getElementById('authSection').style.display = 'none';
-                document.getElementById('dashboard').style.display = 'block';
-                document.getElementById('welcomeUser').innerText = username;
-                
-                if (isOwner) {
-                    document.getElementById('adminBtn').style.display = 'inline-block';
-                }
-                
-                window.startTime = new Date();
-                startIntervals();
-                addTerminalLine(`[INFO] Welcome ${username}! Type 'help' for commands`);
-            } else {
-                alert('Login failed: ' + data.message);
-            }
-        });
-        
-        function showAdminPanel() {
-            if (!isOwner) return;
-            fetch('/api/pending')
-                .then(res => res.json())
-                .then(data => {
-                    let html = '';
-                    if (data.pending.length === 0) {
-                        html = '<p>No pending approvals</p>';
-                    } else {
-                        data.pending.forEach(user => {
-                            html += `
-                                <div class="pending-item">
-                                    <div>
-                                        <strong>${user.username}</strong><br>
-                                        Email: ${user.email || 'N/A'}<br>
-                                        Requested: ${user.created}
-                                    </div>
-                                    <div>
-                                        <button class="approve-btn" onclick="approveUser('${user.username}')">APPROVE</button>
-                                        <button class="reject-btn" onclick="rejectUser('${user.username}')">REJECT</button>
-                                    </div>
-                                </div>
-                            `;
-                        });
-                    }
-                    document.getElementById('pendingList').innerHTML = html;
-                    document.getElementById('adminPanel').style.display = 'block';
-                    document.getElementById('dashboard').style.display = 'none';
-                });
-        }
-        
-        async function approveUser(username) {
-            const response = await fetch('/api/approve', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({username})
-            });
-            const data = await response.json();
-            alert(data.message);
-            showAdminPanel();
-        }
-        
-        async function rejectUser(username) {
-            const response = await fetch('/api/reject', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({username})
-            });
-            const data = await response.json();
-            alert(data.message);
-            showAdminPanel();
-        }
-        
-        function closeAdminPanel() {
-            document.getElementById('adminPanel').style.display = 'none';
-            document.getElementById('dashboard').style.display = 'block';
+        function showLogin() {
+            document.getElementById('loginForm').style.display = 'block';
+            document.getElementById('registerForm').style.display = 'none';
+            document.getElementById('approvalPanel').style.display = 'none';
         }
         
         function updateUptime() {
             if (!window.startTime) window.startTime = new Date();
             const diff = Math.floor((new Date() - window.startTime) / 1000);
-            const hours = Math.floor(diff / 3600);
-            const minutes = Math.floor((diff % 3600) / 60);
-            const seconds = diff % 60;
-            document.getElementById('uptime').innerText = `${hours}h ${minutes}m ${seconds}s`;
+            document.getElementById('uptime').innerText = `${Math.floor(diff/3600)}h ${Math.floor((diff%3600)/60)}m ${diff%60}s`;
         }
         
         function updateStats() {
@@ -656,44 +496,20 @@ HTML_TEMPLATE = """
         }
         
         function controlServer(action) {
-            const statusEl = document.getElementById('status');
-            if (action === 'start') {
-                if (!serverRunning) {
-                    serverRunning = true;
+            fetch('/api/control', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({action: action})
+            }).then(res => res.json()).then(data => {
+                serverRunning = data.running;
+                document.getElementById('status').innerText = data.running ? 'RUNNING' : 'STOPPED';
+                addTerminalLine(data.message);
+                if (action === 'restart') {
+                    setTimeout(() => { window.startTime = new Date(); }, 2000);
+                } else if (action === 'start') {
                     window.startTime = new Date();
-                    statusEl.innerText = 'RUNNING';
-                    addTerminalLine('[INFO] Server started');
-                    startIntervals();
-                } else {
-                    addTerminalLine('[WARN] Server already running');
                 }
-            } else if (action === 'stop') {
-                if (serverRunning) {
-                    serverRunning = false;
-                    statusEl.innerText = 'STOPPED';
-                    addTerminalLine('[WARN] Server stopped');
-                    if (uptimeInterval) clearInterval(uptimeInterval);
-                    if (statsInterval) clearInterval(statsInterval);
-                } else {
-                    addTerminalLine('[ERROR] Server already stopped');
-                }
-            } else if (action === 'restart') {
-                addTerminalLine('[INFO] Restarting...');
-                setTimeout(() => {
-                    serverRunning = true;
-                    window.startTime = new Date();
-                    statusEl.innerText = 'RUNNING';
-                    addTerminalLine('[INFO] Server restarted');
-                    startIntervals();
-                }, 2000);
-            }
-        }
-        
-        function startIntervals() {
-            if (uptimeInterval) clearInterval(uptimeInterval);
-            if (statsInterval) clearInterval(statsInterval);
-            uptimeInterval = setInterval(updateUptime, 1000);
-            statsInterval = setInterval(updateStats, 3000);
+            });
         }
         
         function addTerminalLine(text) {
@@ -706,72 +522,144 @@ HTML_TEMPLATE = """
         }
         
         function clearLogs() {
-            const terminalBody = document.getElementById('terminalBody');
-            terminalBody.innerHTML = '<div class="terminal-line">$ [INFO] Logs cleared</div>';
+            document.getElementById('terminalBody').innerHTML = '<div class="terminal-line">$ [INFO] Logs cleared</div>';
+            addTerminalLine('[INFO] Terminal cleared');
         }
         
         async function executeCommand() {
             const input = document.getElementById('commandInput');
             const command = input.value.trim();
             if (!command) return;
-            
             addTerminalLine(`> ${command}`);
             
             const systemCommands = ['help', 'ls', 'pwd', 'whoami', 'date', 'time', 'clear'];
             if (systemCommands.includes(command.toLowerCase())) {
-                handleSystemCommand(command);
-            } else {
-                addTerminalLine('[OGGY AI] Thinking...');
-                const response = await fetch('/api/ai', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({prompt: command})
-                });
-                const data = await response.json();
-                addTerminalLine(`[OGGY AI] ${data.response}`);
-                document.getElementById('aiContent').innerHTML = data.response;
-                document.getElementById('aiResponse').style.display = 'block';
-                setTimeout(() => {
-                    document.getElementById('aiResponse').style.display = 'none';
-                }, 10000);
+                const responses = {
+                    'help': 'OGGY HOSTING Commands: help, ls, pwd, whoami, date, time, clear | Or ask anything to AI',
+                    'ls': 'app.py  requirements.txt  logs/  config/  oggy_secrets/',
+                    'pwd': '/home/oggy/server',
+                    'whoami': currentUser,
+                    'date': new Date().toString(),
+                    'time': new Date().toLocaleTimeString(),
+                    'clear': () => { document.getElementById('terminalBody').innerHTML = '<div class="terminal-line">$ [INFO] Cleared</div>'; }
+                };
+                if (command === 'clear') responses.clear();
+                else addTerminalLine(responses[command] || `Command not found: ${command}`);
+                input.value = '';
+                return;
             }
             
+            addTerminalLine('[AI] Processing...');
+            const response = await fetch('/api/ai', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({prompt: command})
+            });
+            const data = await response.json();
+            addTerminalLine(`[OGGY-AI] ${data.response}`);
+            document.getElementById('aiContent').innerHTML = data.response;
+            document.getElementById('aiResponse').style.display = 'block';
+            setTimeout(() => { document.getElementById('aiResponse').style.display = 'none'; }, 15000);
             input.value = '';
         }
         
-        function handleSystemCommand(command) {
-            const responses = {
-                'help': 'OGGY_KILLER Commands:\n- help: Show this\n- ls: List files\n- pwd: Show path\n- whoami: Show user\n- date: Current date\n- time: Current time\n- clear: Clear terminal\n- Or ask anything to AI',
-                'ls': 'app.py  requirements.txt  logs/  config/  users/',
-                'pwd': '/home/oggy/server',
-                'whoami': currentUser,
-                'date': new Date().toString(),
-                'time': new Date().toLocaleTimeString(),
-                'clear': () => { document.getElementById('terminalBody').innerHTML = ''; addTerminalLine('[INFO] Terminal cleared'); }
-            };
-            if (command === 'clear') {
-                responses.clear();
-            } else {
-                addTerminalLine(responses[command] || `Command not found: ${command}`);
-            }
+        function showOwnerPanel() {
+            fetch('/api/pending-requests').then(res => res.json()).then(data => {
+                let html = '';
+                data.requests.forEach(req => {
+                    html += `<div class="request-card">
+                        <strong>User:</strong> ${req.username}<br>
+                        <strong>Email:</strong> ${req.email || 'N/A'}<br>
+                        <strong>Requested:</strong> ${req.created_at}<br>
+                        <button class="approve-btn" onclick="approveRequest('${req.username}')">✅ Approve</button>
+                        <button class="reject-btn" onclick="rejectRequest('${req.username}')">❌ Reject</button>
+                    </div>`;
+                });
+                if (data.requests.length === 0) html = '<p>No pending requests</p>';
+                document.getElementById('requestsList').innerHTML = html;
+                document.getElementById('loginForm').style.display = 'none';
+                document.getElementById('dashboard').style.display = 'none';
+                document.getElementById('approvalPanel').style.display = 'block';
+            });
         }
+        
+        function approveRequest(username) {
+            fetch('/api/approve-request', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username: username, action: 'approve'})
+            }).then(() => { showOwnerPanel(); alert('User approved!'); });
+        }
+        
+        function rejectRequest(username) {
+            fetch('/api/approve-request', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username: username, action: 'reject'})
+            }).then(() => { showOwnerPanel(); alert('User rejected!'); });
+        }
+        
+        // Login handler
+        document.getElementById('login').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+            
+            const response = await fetch('/api/login', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username, password})
+            });
+            const data = await response.json();
+            
+            if (data.success) {
+                currentUser = username;
+                document.getElementById('loginForm').style.display = 'none';
+                document.getElementById('dashboard').style.display = 'block';
+                document.getElementById('welcomeUser').innerHTML = username;
+                if (data.is_owner) {
+                    document.getElementById('ownerPanelBtn').style.display = 'inline-block';
+                }
+                window.startTime = new Date();
+                serverRunning = true;
+                if (uptimeInterval) clearInterval(uptimeInterval);
+                if (statsInterval) clearInterval(statsInterval);
+                uptimeInterval = setInterval(updateUptime, 1000);
+                statsInterval = setInterval(updateStats, 3000);
+                addTerminalLine(`[INFO] Welcome ${username} to OGGY HOSTING`);
+            } else {
+                alert(data.message || 'Login failed! Account not approved or invalid credentials');
+            }
+        });
+        
+        // Register handler
+        document.getElementById('register').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const username = document.getElementById('regUsername').value;
+            const password = document.getElementById('regPassword').value;
+            const email = document.getElementById('regEmail').value;
+            
+            const response = await fetch('/api/register', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({username, password, email})
+            });
+            const data = await response.json();
+            alert(data.message);
+            if (data.success) {
+                showLogin();
+            }
+        });
         
         function logout() {
             if (uptimeInterval) clearInterval(uptimeInterval);
             if (statsInterval) clearInterval(statsInterval);
-            window.location.reload();
+            document.getElementById('dashboard').style.display = 'none';
+            document.getElementById('loginForm').style.display = 'block';
+            document.getElementById('username').value = '';
+            document.getElementById('password').value = '';
+            currentUser = "";
         }
-        
-        // Make functions global
-        window.showTab = showTab;
-        window.showAdminPanel = showAdminPanel;
-        window.closeAdminPanel = closeAdminPanel;
-        window.approveUser = approveUser;
-        window.rejectUser = rejectUser;
-        window.controlServer = controlServer;
-        window.clearLogs = clearLogs;
-        window.executeCommand = executeCommand;
-        window.logout = logout;
     </script>
 </body>
 </html>
@@ -781,109 +669,135 @@ HTML_TEMPLATE = """
 def index():
     return render_template_string(HTML_TEMPLATE)
 
+@app.route('/api/login', methods=['POST'])
+def api_login():
+    data = request.json
+    username = data.get('username')
+    password = data.get('password')
+    
+    users = load_users()
+    
+    if username in users:
+        user = users[username]
+        if user.get('password') == password:
+            if user.get('approved', False):
+                session['user'] = username
+                return jsonify({'success': True, 'is_owner': user.get('role') == 'owner'})
+            else:
+                return jsonify({'success': False, 'message': 'Account pending approval from OGGY'})
+    
+    return jsonify({'success': False, 'message': 'Invalid credentials'})
+
 @app.route('/api/register', methods=['POST'])
-def register():
+def api_register():
     data = request.json
     username = data.get('username')
     password = data.get('password')
     email = data.get('email', '')
     
+    users = load_users()
+    
+    if username in users:
+        return jsonify({'success': False, 'message': 'Username already exists'})
+    
     if not username or not password:
         return jsonify({'success': False, 'message': 'Username and password required'})
     
-    if username in approved_users:
-        return jsonify({'success': False, 'message': 'Username already exists'})
-    
-    if username in pending_users:
-        return jsonify({'success': False, 'message': 'Already pending approval'})
-    
-    pending_users[username] = {
+    # Add to pending requests
+    requests_list = load_requests()
+    requests_list.append({
+        'username': username,
         'password': password,
         'email': email,
-        'created': str(datetime.now()),
+        'created_at': str(datetime.now()),
         'status': 'pending'
-    }
-    save_pending_users(pending_users)
+    })
+    save_requests(requests_list)
     
-    return jsonify({'success': True, 'message': 'Registration request sent. Wait for owner approval.'})
+    return jsonify({'success': True, 'message': 'Request sent to OGGY for approval'})
 
-@app.route('/api/login', methods=['POST'])
-def login():
-    data = request.json
-    username = data.get('username')
-    password = data.get('password')
+@app.route('/api/pending-requests', methods=['GET'])
+def api_pending_requests():
+    if session.get('user') != 'OGGY':
+        return jsonify({'requests': []})
     
-    # Check approved users
-    if username in approved_users and approved_users[username]['password'] == password:
-        session['user'] = username
-        return jsonify({'success': True, 'is_owner': username == 'OGGY'})
-    
-    # Check if pending
-    if username in pending_users:
-        return jsonify({'success': False, 'message': 'Your account is pending approval'})
-    
-    return jsonify({'success': False, 'message': 'Invalid credentials'})
+    requests_list = load_requests()
+    pending = [r for r in requests_list if r.get('status') == 'pending']
+    return jsonify({'requests': pending})
 
-@app.route('/api/pending')
-def get_pending():
-    if not session.get('user') == 'OGGY':
-        return jsonify({'error': 'Unauthorized'}), 403
-    
-    pending_list = [{'username': k, 'email': v['email'], 'created': v['created']} for k, v in pending_users.items()]
-    return jsonify({'pending': pending_list})
-
-@app.route('/api/approve', methods=['POST'])
-def approve_user():
-    if not session.get('user') == 'OGGY':
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 403
+@app.route('/api/approve-request', methods=['POST'])
+def api_approve_request():
+    if session.get('user') != 'OGGY':
+        return jsonify({'success': False, 'message': 'Unauthorized'})
     
     data = request.json
     username = data.get('username')
+    action = data.get('action')
     
-    if username in pending_users:
-        approved_users[username] = {
-            'password': pending_users[username]['password'],
-            'created': str(datetime.now())
-        }
-        del pending_users[username]
-        save_pending_users(pending_users)
-        save_approved_users(approved_users)
-        return jsonify({'success': True, 'message': f'User {username} approved'})
+    requests_list = load_requests()
+    users = load_users()
     
-    return jsonify({'success': False, 'message': 'User not found'})
-
-@app.route('/api/reject', methods=['POST'])
-def reject_user():
-    if not session.get('user') == 'OGGY':
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 403
+    for req in requests_list:
+        if req['username'] == username and req.get('status') == 'pending':
+            if action == 'approve':
+                users[username] = {
+                    'password': req['password'],
+                    'role': 'user',
+                    'approved': True,
+                    'created_at': str(datetime.now())
+                }
+                save_users(users)
+                req['status'] = 'approved'
+            else:
+                req['status'] = 'rejected'
+            save_requests(requests_list)
+            return jsonify({'success': True})
     
-    data = request.json
-    username = data.get('username')
-    
-    if username in pending_users:
-        del pending_users[username]
-        save_pending_users(pending_users)
-        return jsonify({'success': True, 'message': f'User {username} rejected'})
-    
-    return jsonify({'success': False, 'message': 'User not found'})
+    return jsonify({'success': False, 'message': 'Request not found'})
 
 @app.route('/api/ai', methods=['POST'])
-def ai_endpoint():
+def api_ai():
     data = request.json
     prompt = data.get('prompt', '')
     if not prompt:
-        return jsonify({'response': 'Type something, CHUMT KE PYASA 😈'})
-    
+        return jsonify({'response': 'Type something first, CHUMT KE PYASA 😈'})
     response = call_a4f_api(prompt)
     return jsonify({'response': response})
+
+@app.route('/api/control', methods=['POST'])
+def api_control():
+    data = request.json
+    action = data.get('action')
+    username = session.get('user', 'guest')
+    stats = get_server_stats(username)
+    
+    if action == 'start':
+        stats['is_running'] = True
+        stats['start_time'] = datetime.now()
+        return jsonify({'running': True, 'message': '[INFO] Server started'})
+    elif action == 'stop':
+        stats['is_running'] = False
+        return jsonify({'running': False, 'message': '[WARN] Server stopped'})
+    elif action == 'restart':
+        stats['is_running'] = True
+        stats['start_time'] = datetime.now()
+        return jsonify({'running': True, 'message': '[INFO] Server restarted'})
+    return jsonify({'running': stats['is_running'], 'message': '[INFO] OK'})
 
 if __name__ == '__main__':
     print("""
     ╔══════════════════════════════════════════════════╗
-    ║     OGGY_KILLER HOSTING - READY                  ║
-    ║     Owner Login: OGGY / OGGY159357               ║
-    ║     Open: http://localhost:5000                  ║
-    ║     Developer: OGGY | CHUMT KA GULAM             ║
+    ║     🔥 OGGY HOSTING - FULLY LOADED 🔥            ║
+    ╠══════════════════════════════════════════════════╣
+    ║  Owner Login:  OGGY / OGGY@123                  ║
+    ║  URL:          http://localhost:5000            ║
+    ║                                                  ║
+    ║  Features:                                      ║
+    ║  - Free account registration                    ║
+    ║  - Owner approval system                        ║
+    ║  - A4F Claude AI integration                    ║
+    ║  - Live server stats                            ║
+    ║  - Terminal with AI commands                    ║
     ╚══════════════════════════════════════════════════╝
     """)
     app.run(debug=True, host='0.0.0.0', port=5000)
