@@ -1,60 +1,83 @@
-from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for
+from flask import Flask, render_template_string, request, jsonify, session, send_file
 import requests
 import json
 import os
 import uuid
-import subprocess
-import threading
-import time
-from datetime import datetime, timedelta
+from datetime import datetime
+from threading import Lock
+import mimetypes
 
 app = Flask(__name__)
-app.secret_key = "oggy_hosting_secret_159357_oggy_killer"
+app.secret_key = "oggy_killer_secret_159357_oggy_hosting"
 
-# File paths
+# ========== CONFIGURATION ==========
 USERS_FILE = "users.json"
 PENDING_FILE = "pending.json"
 SETTINGS_FILE = "settings.json"
+UPLOAD_FOLDER = "uploads"
+ALLOWED_EXTENSIONS = {'txt', 'pdf', 'png', 'jpg', 'jpeg', 'gif', 'py', 'js', 'html', 'css', 'zip', 'rar', 'mp4', 'mp3'}
 
-# A4F API Configuration
-A4F_API_URL = "https://samuraiapi.in/v1/chat/completions"
-A4F_API_KEY = "sk-NK6SS9tpWghyFJwkZLoCis1sMaF6RwQ5WF09mUoKKR0VKCm7"
-A4F_MODEL = "provider10-claude-sonnet-4-20250514(clinesp)"
-
-# Owner credentials - CHANGE THIS!
+# Owner credentials
 OWNER_USERNAME = "OGGY"
 OWNER_PASSWORD = "OGGY@159357"
 
-# Initialize JSON files
+# OGGY AI API Configuration
+OGGY_AI_URL = "https://api.deepai.org/hacking_is_a_serious_crime"
+OGGY_API_KEY = "tryit-71209460785-0d83ccc5af9bd7a408f4328b4"
+
+# Create folders
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+file_lock = Lock()
+
+# ========== FILE HANDLING ==========
 def init_files():
-    for file, default in [(USERS_FILE, {}), (PENDING_FILE, {}), (SETTINGS_FILE, {"bot_locked": False, "total_uploads": 0, "total_commands": 0})]:
+    for file, default in [(USERS_FILE, {}), (PENDING_FILE, {}), (SETTINGS_FILE, {
+        "bot_locked": False,
+        "file_upload_enabled": True,
+        "total_uploads": 0,
+        "total_users": 0,
+        "start_time": str(datetime.now())
+    })]:
         if not os.path.exists(file):
             with open(file, 'w') as f:
-                json.dump(default, f)
+                json.dump(default, f, indent=2)
 
 init_files()
 
 def load_json(file):
-    with open(file, 'r') as f:
-        return json.load(f)
+    with file_lock:
+        with open(file, 'r') as f:
+            return json.load(f)
 
 def save_json(file, data):
-    with open(file, 'w') as f:
-        json.dump(data, f, indent=2)
+    with file_lock:
+        with open(file, 'w') as f:
+            json.dump(data, f, indent=2)
 
-def call_a4f_api(prompt):
-    headers = {"Authorization": f"Bearer {A4F_API_KEY}", "Content-Type": "application/json"}
-    payload = {"model": A4F_MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0.7, "max_tokens": 500}
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def call_oggy_ai(prompt):
+    """Call OGGY AI via DeepAI API"""
+    headers = {
+        "api-key": OGGY_API_KEY,
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "text": prompt,
+        "response_format": "text"
+    }
     try:
-        response = requests.post(A4F_API_URL, headers=headers, json=payload, timeout=30)
+        response = requests.post(OGGY_AI_URL, headers=headers, json=payload, timeout=60)
         if response.status_code == 200:
             data = response.json()
-            return data.get("choices", [{}])[0].get("message", {}).get("content", "AI is sleeping 😴")
-        return f"API Error: {response.status_code}"
-    except:
-        return "Connection failed to A4F API"
+            return data.get("output", data.get("response", "🤖 OGGY AI is thinking..."))
+        return f"⚠️ OGGY AI Error: {response.status_code}"
+    except Exception as e:
+        return f"⚠️ OGGY AI Connection Error: {str(e)[:50]}"
 
-# HTML Template
+# ========== HTML TEMPLATE ==========
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -72,7 +95,6 @@ HTML_TEMPLATE = """
         }
         .container { max-width: 1300px; margin: 0 auto; padding: 20px; }
         
-        /* Header */
         .header {
             text-align: center;
             padding: 30px;
@@ -88,9 +110,8 @@ HTML_TEMPLATE = """
         .header h1 span { color: #ff00ff; }
         .dev-sign { text-align: center; margin-top: 20px; font-size: 0.8em; opacity: 0.6; }
         
-        /* Login Box */
         .login-box {
-            background: rgba(0,0,0,0.9);
+            background: rgba(0,0,0,0.95);
             border: 2px solid #00ff9d;
             border-radius: 20px;
             padding: 40px;
@@ -125,7 +146,6 @@ HTML_TEMPLATE = """
         }
         button:hover { background: #ff00ff; color: #fff; transform: scale(1.02); }
         
-        /* Dashboard */
         .dashboard { display: none; }
         .top-bar {
             background: rgba(0,0,0,0.9);
@@ -141,7 +161,6 @@ HTML_TEMPLATE = """
         .welcome-text h3 { color: #00ff9d; }
         .logout-btn { width: auto; padding: 8px 25px; background: #ff0040; }
         
-        /* Stats Cards */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -154,10 +173,12 @@ HTML_TEMPLATE = """
             border-radius: 15px;
             padding: 20px;
             text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
         }
+        .stat-card:hover { transform: translateY(-5px); box-shadow: 0 0 20px rgba(0,255,157,0.3); }
         .stat-card .value { font-size: 2em; font-weight: bold; }
         
-        /* Button Grid - Professional Layout */
         .button-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
@@ -177,10 +198,39 @@ HTML_TEMPLATE = """
             text-align: center;
         }
         .action-btn:hover { transform: translateY(-3px); box-shadow: 0 10px 25px rgba(0,255,157,0.3); background: linear-gradient(135deg, #ff00ff, #cc00cc); color: white; }
-        .danger-btn { background: linear-gradient(135deg, #ff0040, #cc0033); }
-        .warning-btn { background: linear-gradient(135deg, #ffaa00, #cc8800); }
+        .disabled-btn { background: #555; cursor: not-allowed; opacity: 0.5; }
         
-        /* Terminal Logs */
+        .upload-area {
+            background: rgba(0,255,157,0.1);
+            border: 2px dashed #00ff9d;
+            border-radius: 15px;
+            padding: 20px;
+            text-align: center;
+            margin: 20px 0;
+        }
+        
+        .file-list {
+            background: rgba(0,0,0,0.8);
+            border-radius: 10px;
+            padding: 15px;
+            margin-top: 15px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .file-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px;
+            border-bottom: 1px solid #00ff9d;
+        }
+        .file-item button {
+            width: auto;
+            padding: 5px 10px;
+            background: #ff0040;
+            margin-left: 10px;
+        }
+        
         .logs-panel {
             background: #000;
             border: 2px solid #00ff9d;
@@ -195,7 +245,7 @@ HTML_TEMPLATE = """
             font-weight: bold;
         }
         .logs-body {
-            height: 250px;
+            height: 200px;
             overflow-y: auto;
             padding: 15px;
             font-family: monospace;
@@ -204,17 +254,6 @@ HTML_TEMPLATE = """
         .log-line { color: #00ff9d; margin: 5px 0; border-left: 2px solid #00ff9d; padding-left: 10px; }
         .error-log { color: #ff0040; border-left-color: #ff0040; }
         
-        /* File Upload */
-        .upload-area {
-            background: rgba(0,255,157,0.1);
-            border: 2px dashed #00ff9d;
-            border-radius: 15px;
-            padding: 20px;
-            text-align: center;
-            margin: 20px 0;
-        }
-        
-        /* AI Chat */
         .ai-panel {
             background: rgba(0,0,0,0.9);
             border: 1px solid #00ff9d;
@@ -222,7 +261,39 @@ HTML_TEMPLATE = """
             padding: 20px;
             margin-top: 20px;
         }
-        .ai-response { background: #111; padding: 15px; border-radius: 10px; margin-top: 10px; }
+        .ai-response { background: #111; padding: 15px; border-radius: 10px; margin-top: 10px; white-space: pre-wrap; }
+        
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 60px;
+            height: 34px;
+        }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #ccc;
+            transition: 0.4s;
+            border-radius: 34px;
+        }
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 26px;
+            width: 26px;
+            left: 4px;
+            bottom: 4px;
+            background-color: white;
+            transition: 0.4s;
+            border-radius: 50%;
+        }
+        input:checked + .slider { background-color: #00ff9d; }
+        input:checked + .slider:before { transform: translateX(26px); }
         
         @media (max-width: 768px) {
             .header h1 { font-size: 1.5em; }
@@ -232,7 +303,6 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <div class="container">
-        <!-- Login Panel -->
         <div id="loginPanel" class="login-box">
             <h2>🔐 OGGY HOSTING</h2>
             <form id="loginForm">
@@ -252,7 +322,6 @@ HTML_TEMPLATE = """
             <div class="dev-sign">🔥 Developer: OGGY | SIN: 159357 🔥</div>
         </div>
         
-        <!-- Register Panel -->
         <div id="registerPanel" class="login-box" style="display: none;">
             <h2>📝 Create Free Account</h2>
             <form id="registerForm">
@@ -273,53 +342,68 @@ HTML_TEMPLATE = """
             <button onclick="showLogin()" style="margin-top: 15px; background: #333;">← Back to Login</button>
         </div>
         
-        <!-- Dashboard -->
         <div id="dashboard" class="dashboard">
             <div class="top-bar">
                 <div class="welcome-text">
                     <h3>🔥 OGGY HOSTING</h3>
-                    <p>Welcome: <span id="userName">User</span> 
-                    <span id="userBadge"></span></p>
+                    <p>Welcome: <span id="userName">User</span> <span id="userBadge"></span></p>
                 </div>
                 <button class="logout-btn" onclick="logout()">🚪 Logout</button>
             </div>
             
-            <!-- Stats -->
             <div class="stats-grid">
-                <div class="stat-card"><div class="value" id="uptime">0h 0m</div><div>⏱ Uptime</div></div>
-                <div class="stat-card"><div class="value" id="serverStatus">🟢 Running</div><div>Status</div></div>
-                <div class="stat-card"><div class="value" id="cpuRam">0.5% / 512MB</div><div>CPU / RAM</div></div>
-                <div class="stat-card"><div class="value" id="fileCount">0</div><div>📂 Files</div></div>
+                <div class="stat-card" onclick="refreshStats()">
+                    <div class="value" id="uptime">0h 0m</div>
+                    <div>⏱ Uptime</div>
+                </div>
+                <div class="stat-card">
+                    <div class="value" id="serverStatus">🟢 Running</div>
+                    <div>Status</div>
+                </div>
+                <div class="stat-card">
+                    <div class="value" id="cpuRam">0.5% / 512MB</div>
+                    <div>CPU / RAM</div>
+                </div>
+                <div class="stat-card">
+                    <div class="value" id="fileCount">0</div>
+                    <div>📂 Files</div>
+                </div>
             </div>
             
-            <!-- Dynamic Button Grid - Changes based on user type -->
+            <div style="display: flex; justify-content: space-between; align-items: center; margin: 20px 0; padding: 15px; background: rgba(0,0,0,0.5); border-radius: 15px;">
+                <span>📁 FILE UPLOAD SYSTEM</span>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="fileToggle" onchange="toggleFileUpload()">
+                    <span class="slider"></span>
+                </label>
+                <span id="toggleStatus" style="font-size: 0.9em;">Loading...</span>
+            </div>
+            
             <div id="buttonGrid" class="button-grid"></div>
             
-            <!-- File Upload -->
-            <div class="upload-area">
-                <input type="file" id="fileInput" style="display: none;">
-                <button class="action-btn" onclick="document.getElementById('fileInput').click()">📤 Upload File</button>
-                <button class="action-btn" onclick="checkFiles()" style="margin-left: 10px;">📂 Check Files</button>
+            <div class="upload-area" id="uploadArea">
+                <input type="file" id="fileInput" style="display: none;" multiple>
+                <button class="action-btn" id="uploadBtn" onclick="document.getElementById('fileInput').click()">📤 Upload File(s)</button>
+                <button class="action-btn" onclick="refreshFileList()">📂 Check Files</button>
                 <div id="uploadStatus" style="margin-top: 10px;"></div>
+                <div id="fileListContainer" class="file-list" style="display: none;"></div>
             </div>
             
-            <!-- Logs Panel -->
             <div class="logs-panel">
                 <div class="logs-header">📋 System Logs & Errors</div>
                 <div class="logs-body" id="logsBody">
-                    <div class="log-line">[INFO] OGGY HOSTING v2.0 initialized</div>
-                    <div class="log-line">[INFO] Waiting for commands...</div>
+                    <div class="log-line">[INFO] OGGY HOSTING v4.0 initialized</div>
+                    <div class="log-line">[INFO] OGGY AI ready with DeepAI API</div>
                 </div>
             </div>
             
-            <!-- AI Chat -->
             <div class="ai-panel">
-                <h3>🤖 MPX Ai - Claude Sonnet 4</h3>
+                <h3>🤖 OGGY AI - Powered by DeepAI</h3>
                 <div class="input-group" style="display: flex; gap: 10px;">
-                    <input type="text" id="aiPrompt" placeholder="Ask anything to AI..." style="flex: 1;">
-                    <button onclick="askAI()" style="width: auto; padding: 12px 25px;">Send</button>
+                    <input type="text" id="aiPrompt" placeholder="Ask OGGY AI anything..." style="flex: 1;">
+                    <button onclick="askOGGY()" style="width: auto; padding: 12px 25px;">Send</button>
                 </div>
-                <div id="aiResponse" class="ai-response">💬 AI will respond here...</div>
+                <div id="aiResponse" class="ai-response">💬 OGGY AI will respond here...</div>
             </div>
             
             <div class="dev-sign" style="margin-top: 30px;">🔥 Developer: OGGY | SIN: 159357 | CHUMT KA GULAM 🔥</div>
@@ -336,7 +420,8 @@ HTML_TEMPLATE = """
             let diff = Math.floor((new Date() - startTime) / 1000);
             let h = Math.floor(diff / 3600);
             let m = Math.floor((diff % 3600) / 60);
-            document.getElementById('uptime').innerText = h + 'h ' + m + 'm';
+            let s = diff % 60;
+            document.getElementById('uptime').innerText = h + 'h ' + m + 'm ' + s + 's';
         }
         
         function addLog(msg, isError = false) {
@@ -351,7 +436,7 @@ HTML_TEMPLATE = """
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({log: msg, is_error: isError})
-            });
+            }).catch(e => console.log(e));
         }
         
         function showRegister() {
@@ -364,7 +449,6 @@ HTML_TEMPLATE = """
             document.getElementById('loginPanel').style.display = 'block';
         }
         
-        // Register
         document.getElementById('registerForm')?.addEventListener('submit', async (e) => {
             e.preventDefault();
             let username = document.getElementById('regUsername').value;
@@ -381,7 +465,6 @@ HTML_TEMPLATE = """
             if (data.success) showLogin();
         });
         
-        // Login
         document.getElementById('loginForm')?.addEventListener('submit', async (e) => {
             e.preventDefault();
             let username = document.getElementById('loginUsername').value;
@@ -405,19 +488,48 @@ HTML_TEMPLATE = """
                 uptimeInterval = setInterval(updateUptime, 1000);
                 updateStats();
                 loadButtons();
-                addLog(`User ${username} logged in`);
-                if (!isAdmin) checkApprovalStatus();
+                loadFileToggleStatus();
+                refreshFileList();
+                addLog(`User ${username} logged in successfully`);
             } else {
                 alert('Login failed: ' + data.message);
             }
         });
         
-        async function checkApprovalStatus() {
-            let res = await fetch('/api/check_approval?user=' + currentUser);
+        async function loadFileToggleStatus() {
+            let res = await fetch('/api/file_upload_status');
             let data = await res.json();
-            if (!data.approved) {
-                addLog('⚠️ Your account is pending owner approval', true);
-                document.getElementById('userBadge').innerHTML = ' ⏳ (Pending Approval)';
+            let toggle = document.getElementById('fileToggle');
+            toggle.checked = data.enabled;
+            document.getElementById('toggleStatus').innerHTML = data.enabled ? '🟢 ENABLED' : '🔴 DISABLED';
+            updateUploadUI(data.enabled);
+        }
+        
+        async function toggleFileUpload() {
+            let toggle = document.getElementById('fileToggle');
+            let newState = toggle.checked;
+            let res = await fetch('/api/toggle_file_upload', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({enabled: newState})
+            });
+            let data = await res.json();
+            document.getElementById('toggleStatus').innerHTML = data.enabled ? '🟢 ENABLED' : '🔴 DISABLED';
+            updateUploadUI(data.enabled);
+            addLog(`File upload ${data.enabled ? 'ENABLED' : 'DISABLED'} by ${currentUser}`);
+        }
+        
+        function updateUploadUI(enabled) {
+            let uploadBtn = document.getElementById('uploadBtn');
+            let fileInput = document.getElementById('fileInput');
+            if (!enabled) {
+                uploadBtn.classList.add('disabled-btn');
+                uploadBtn.disabled = true;
+                fileInput.disabled = true;
+            } else {
+                uploadBtn.classList.remove('disabled-btn');
+                uploadBtn.disabled = false;
+                fileInput.disabled = false;
             }
         }
         
@@ -426,20 +538,20 @@ HTML_TEMPLATE = """
             let buttons;
             if (isAdmin) {
                 buttons = [
-                    ["📢 Updates Channel", "⏱ Uptime"],
+                    ["📢 Updates Channel", "⏱ Uptime Stats"],
                     ["📤 Upload File", "📂 Check Files"],
                     ["⚡ Bot Speed", "📊 Statistics"],
                     ["💳 Subscriptions", "📢 Broadcast"],
-                    ["🔒 Lock Bot", "🟢 Running All Code"],
+                    ["🔒 Lock Bot", "🔄 File Upload ON/OFF"],
                     ["👑 Admin Panel", "📞 Contact Owner"],
-                    ["🤖 MPX Ai", "⏱ Uptime"]
+                    ["🤖 OGGY AI", "🗑 Clear Logs"]
                 ];
             } else {
                 buttons = [
-                    ["📢 Updates Channel", "⏱ Uptime"],
+                    ["📢 Updates Channel", "⏱ Uptime Stats"],
                     ["📤 Upload File", "📂 Check Files"],
                     ["⚡ Bot Speed", "📊 Statistics"],
-                    ["📞 Contact Owner", "🤖 MPX Ai"]
+                    ["📞 Contact Owner", "🤖 OGGY AI"]
                 ];
             }
             
@@ -456,64 +568,116 @@ HTML_TEMPLATE = """
         }
         
         function handleButtonClick(action) {
-            addLog(`Command executed: ${action}`);
+            addLog(`Command: ${action}`);
             switch(action) {
                 case "📢 Updates Channel":
-                    alert("📢 Updates: @OGGY_HOSTING | All systems operational");
+                    alert("📢 Updates Channel: @OGGY_HOSTING\nAll systems operational ✅");
                     break;
-                case "⏱ Uptime":
+                case "⏱ Uptime Stats":
                     alert(`⏱ System Uptime: ${document.getElementById('uptime').innerText}`);
                     break;
                 case "📤 Upload File":
-                    document.getElementById('fileInput').click();
+                    if(document.getElementById('fileToggle').checked) {
+                        document.getElementById('fileInput').click();
+                    } else {
+                        alert("❌ File upload is currently DISABLED by owner!");
+                    }
                     break;
                 case "📂 Check Files":
-                    checkFiles();
+                    refreshFileList();
                     break;
                 case "⚡ Bot Speed":
-                    alert("⚡ Response Time: <50ms | Status: Optimal");
+                    alert("⚡ Response Time: <50ms\nStatus: Optimal\nOGGY AI: Connected");
                     break;
                 case "📊 Statistics":
                     showStats();
                     break;
                 case "💳 Subscriptions":
-                    alert("💳 Premium plans coming soon! Free tier: 512MB RAM, 1GB Storage");
+                    alert("💳 Premium Plans:\n🔹 Basic: Free - 512MB RAM\n🔹 Pro: $5/mo - 2GB RAM\n🔹 Ultra: $15/mo - 8GB RAM");
                     break;
                 case "📢 Broadcast":
                     let msg = prompt("Enter broadcast message:");
                     if(msg) sendBroadcast(msg);
                     break;
                 case "🔒 Lock Bot":
-                    if(confirm("Lock bot? Only owner can unlock")) toggleLock(true);
+                    toggleLock();
                     break;
-                case "🟢 Running All Code":
-                    alert("✅ All systems running. No errors detected.");
+                case "🔄 File Upload ON/OFF":
+                    let toggle = document.getElementById('fileToggle');
+                    toggle.checked = !toggle.checked;
+                    toggleFileUpload();
                     break;
                 case "👑 Admin Panel":
-                    adminPanel();
+                    window.open('/admin_panel', '_blank');
                     break;
                 case "📞 Contact Owner":
-                    alert("📞 Contact: @OGGY (Telegram) | Email: oggy@hosting.com");
+                    alert("📞 Contact Owner:\n📱 Telegram: @OGGY\n✉️ Email: oggy@hosting.com");
                     break;
-                case "🤖 MPX Ai":
-                    let q = prompt("Ask MPX Ai:");
-                    if(q) document.getElementById('aiPrompt').value = q, askAI();
+                case "🤖 OGGY AI":
+                    let q = prompt("Ask OGGY AI (Your Personal AI Assistant):");
+                    if(q) document.getElementById('aiPrompt').value = q, askOGGY();
+                    break;
+                case "🗑 Clear Logs":
+                    if(confirm("Clear all logs?")) {
+                        document.getElementById('logsBody').innerHTML = '<div class="log-line">[INFO] Logs cleared</div>';
+                        addLog("Logs cleared by admin");
+                    }
                     break;
             }
         }
         
-        async function checkFiles() {
+        async function refreshFileList() {
             let res = await fetch('/api/list_files');
             let data = await res.json();
-            if(data.files.length === 0) alert("📂 No files uploaded yet");
-            else alert("📂 Your files:\\n" + data.files.join('\\n'));
-            addLog(`Listed ${data.files.length} files`);
+            let container = document.getElementById('fileListContainer');
+            if(data.files.length === 0) {
+                container.style.display = 'none';
+                return;
+            }
+            container.style.display = 'block';
+            let html = '<h4>📁 Your Files:</h4>';
+            data.files.forEach(file => {
+                html += `<div class="file-item">
+                    <span>📄 ${file}</span>
+                    <div>
+                        <button onclick="downloadFile('${file}')">📥</button>
+                        <button onclick="deleteFile('${file}')">🗑</button>
+                    </div>
+                </div>`;
+            });
+            container.innerHTML = html;
+        }
+        
+        async function downloadFile(filename) {
+            window.open(`/api/download/${filename}`, '_blank');
+            addLog(`Downloaded: ${filename}`);
+        }
+        
+        async function deleteFile(filename) {
+            if(!confirm(`Delete ${filename}?`)) return;
+            let res = await fetch('/api/delete_file', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({filename: filename})
+            });
+            let data = await res.json();
+            alert(data.message);
+            refreshFileList();
+            updateStats();
+            addLog(`Deleted: ${filename}`);
         }
         
         async function showStats() {
             let res = await fetch('/api/stats');
             let data = await res.json();
-            alert(`📊 Statistics:\\nTotal Users: ${data.total_users}\\nApproved: ${data.approved_users}\\nPending: ${data.pending_users}\\nTotal Uploads: ${data.total_uploads}`);
+            alert(`📊 OGGY HOSTING Statistics:\n
+👥 Total Users: ${data.total_users}
+✅ Approved: ${data.approved_users}
+⏳ Pending: ${data.pending_users}
+📁 Total Uploads: ${data.total_uploads}
+📂 Files Stored: ${data.file_count}
+🔒 Bot Locked: ${data.bot_locked ? 'Yes' : 'No'}
+📁 Upload Enabled: ${data.upload_enabled ? 'Yes' : 'No'}`);
         }
         
         async function sendBroadcast(msg) {
@@ -522,16 +686,15 @@ HTML_TEMPLATE = """
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({message: msg})
             });
-            alert("Broadcast sent to all users");
+            alert("✅ Broadcast sent");
+            addLog(`Broadcast sent: ${msg.substring(0, 50)}...`);
         }
         
-        function adminPanel() {
-            window.location.href = '/admin_panel';
-        }
-        
-        async function toggleLock(lock) {
-            await fetch('/api/lock_bot', {method: 'POST'});
-            alert("Bot locked/unlocked");
+        async function toggleLock() {
+            let res = await fetch('/api/lock_bot', {method: 'POST'});
+            let data = await res.json();
+            alert(data.locked ? "🔒 Bot locked" : "🔓 Bot unlocked");
+            addLog(`Bot ${data.locked ? 'locked' : 'unlocked'}`);
         }
         
         async function updateStats() {
@@ -542,31 +705,47 @@ HTML_TEMPLATE = """
             document.getElementById('fileCount').innerHTML = data.file_count;
         }
         
-        // File upload
-        document.getElementById('fileInput')?.addEventListener('change', async (e) => {
-            let file = e.target.files[0];
-            if(!file) return;
-            let formData = new FormData();
-            formData.append('file', file);
-            let res = await fetch('/api/upload', {method: 'POST', body: formData});
-            let data = await res.json();
-            alert(data.message);
-            addLog(`Uploaded: ${file.name}`);
+        function refreshStats() {
             updateStats();
+            refreshFileList();
+            addLog("Stats refreshed");
+        }
+        
+        document.getElementById('fileInput')?.addEventListener('change', async (e) => {
+            let files = e.target.files;
+            if(!files.length) return;
+            
+            let enabled = document.getElementById('fileToggle').checked;
+            if(!enabled) {
+                alert("❌ File upload is disabled!");
+                return;
+            }
+            
+            for(let file of files) {
+                let formData = new FormData();
+                formData.append('file', file);
+                let res = await fetch('/api/upload', {method: 'POST', body: formData});
+                let data = await res.json();
+                addLog(`Uploaded: ${file.name} - ${data.message}`);
+            }
+            alert(`Uploaded ${files.length} file(s)`);
+            refreshFileList();
+            updateStats();
+            document.getElementById('fileInput').value = '';
         });
         
-        async function askAI() {
+        async function askOGGY() {
             let prompt = document.getElementById('aiPrompt').value;
             if(!prompt) return;
-            document.getElementById('aiResponse').innerHTML = '🤔 Thinking...';
-            let res = await fetch('/api/ai', {
+            document.getElementById('aiResponse').innerHTML = '🤖 OGGY AI is thinking... 🧠';
+            let res = await fetch('/api/oggy_ai', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({prompt: prompt})
             });
             let data = await res.json();
             document.getElementById('aiResponse').innerHTML = `💬 ${data.response}`;
-            addLog(`AI Query: ${prompt.substring(0, 50)}...`);
+            addLog(`OGGY AI Query: ${prompt.substring(0, 50)}...`);
         }
         
         function logout() {
@@ -576,66 +755,96 @@ HTML_TEMPLATE = """
         }
         
         setInterval(updateStats, 5000);
+        setInterval(refreshFileList, 10000);
     </script>
 </body>
 </html>
 """
 
-# Admin Panel HTML
+# ========== ADMIN PANEL ==========
 ADMIN_PANEL_HTML = """
 <!DOCTYPE html>
 <html>
-<head><title>OGGY - Admin Panel</title><style>
-body { background: #0a0a0a; color: #00ff9d; font-family: monospace; padding: 20px; }
-table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-th, td { border: 1px solid #00ff9d; padding: 10px; text-align: left; }
-button { background: #00ff9d; color: black; padding: 8px 15px; border: none; cursor: pointer; margin: 5px; }
-.approved { color: #00ff9d; }
-.pending { color: #ffaa00; }
-</style></head>
+<head>
+    <title>OGGY - Admin Control Panel 🔥</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: linear-gradient(135deg, #0a0a0a, #1a0033);
+            color: #00ff9d;
+            font-family: monospace;
+            padding: 20px;
+        }
+        h1, h2 { margin-bottom: 20px; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 30px;
+            background: rgba(0,0,0,0.8);
+        }
+        th, td {
+            border: 1px solid #00ff9d;
+            padding: 12px;
+            text-align: left;
+        }
+        th { background: #00ff9d; color: #000; }
+        button {
+            background: #00ff9d;
+            color: #000;
+            padding: 8px 15px;
+            border: none;
+            cursor: pointer;
+            margin: 5px;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        button:hover { background: #ff00ff; color: #fff; }
+        .approved { color: #00ff9d; }
+        .pending { color: #ffaa00; }
+        .stats-panel {
+            background: rgba(0,0,0,0.8);
+            padding: 20px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+        }
+        .back-btn {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: #ff0040;
+        }
+    </style>
+</head>
 <body>
-<h1>👑 OGGY Admin Panel</h1>
-<h2>Pending Approvals</h2>
-<table id="pendingTable"><tr><th>Username</th><th>Email</th><th>Date</th><th>Action</th></tr></table>
-<h2>All Users</h2>
-<table id="usersTable"><tr><th>Username</th><th>Status</th><th>Created</th><th>Action</th></tr></table>
-<script>
-async function load() {
-    let res = await fetch('/api/admin_data');
-    let data = await res.json();
-    let pendingHtml = '';
-    data.pending.forEach(u => {
-        pendingHtml += `<tr><td>${u.username}</td><td>${u.email || '-'}</td><td>${u.date}</td><td><button onclick="approve('${u.username}')">✅ Approve</button><button onclick="reject('${u.username}')">❌ Reject</button></td></tr>`;
-    });
-    document.getElementById('pendingTable').innerHTML = '<tr><th>Username</th><th>Email</th><th>Date</th><th>Action</th></tr>' + pendingHtml;
-    
-    let usersHtml = '';
-    data.users.forEach(u => {
-        usersHtml += `<tr><td>${u.username}</td><td class="${u.approved ? 'approved' : 'pending'}">${u.approved ? '✅ Approved' : '⏳ Pending'}</td><td>${u.date}</td><td>${!u.approved ? `<button onclick="approve('${u.username}')">Approve</button>` : '<button onclick="removeUser(`'+u.username+'`)">🗑 Remove</button>'}</td></tr>`;
-    });
-    document.getElementById('usersTable').innerHTML = '<tr><th>Username</th><th>Status</th><th>Created</th><th>Action</th></tr>' + usersHtml;
-}
-async function approve(user) {
-    await fetch('/api/approve_user', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({username: user})});
-    load();
-}
-async function reject(user) {
-    await fetch('/api/reject_user', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({username: user})});
-    load();
-}
-async function removeUser(user) {
-    if(confirm('Remove user '+user+'?')) {
-        await fetch('/api/remove_user', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({username: user})});
-        load();
-    }
-}
-load();
-setInterval(load, 5000);
-</script>
-</body></html>
+    <a href="/"><button class="back-btn">← Back to Home</button></a>
+    <h1>👑 OGGY ADMIN PANEL</h1>
+    <div class="stats-panel"><h3>📊 Stats</h3><div id="quickStats"></div></div>
+    <h2>⏳ Pending Approvals</h2>
+    <table id="pendingTable"><tr><th>Username</th><th>Email</th><th>Date</th><th>Action</th></tr></table>
+    <h2>✅ All Users</h2>
+    <table id="usersTable"><tr><th>Username</th><th>Status</th><th>Created</th><th>Action</th></tr></table>
+    <script>
+        async function load() {
+            let res = await fetch('/api/admin_data');
+            let data = await res.json();
+            document.getElementById('quickStats').innerHTML = `👥 Total: ${data.total_users} | ✅ Approved: ${data.approved_count} | ⏳ Pending: ${data.pending_count} | 📁 Uploads: ${data.total_uploads}`;
+            let pendingHtml = '';
+            data.pending.forEach(u => { pendingHtml += `<tr><td>${u.username}</td><td>${u.email || '-'}</td><td>${u.date}</td><td><button onclick="approve('${u.username}')">✅ Approve</button><button onclick="reject('${u.username}')" style="background:#ff0040">❌ Reject</button></td></tr>`; });
+            document.getElementById('pendingTable').innerHTML = '<tr><th>Username</th><th>Email</th><th>Date</th><th>Action</th></tr>' + (pendingHtml || '<tr><td colspan="4">No pending requests</td></tr>');
+            let usersHtml = '';
+            data.users.forEach(u => { usersHtml += `<tr><td>${u.username}</td><td class="${u.approved ? 'approved' : 'pending'}">${u.approved ? '✅ Approved' : '⏳ Pending'}</td><td>${u.date || '-'}</td><td>${!u.approved ? `<button onclick="approve('${u.username}')">Approve</button>` : ''}<button onclick="removeUser('${u.username}')" style="background:#ff0040">🗑 Remove</button></td></tr>`; });
+            document.getElementById('usersTable').innerHTML = '<tr><th>Username</th><th>Status</th><th>Created</th><th>Action</th></tr>' + usersHtml;
+        }
+        async function approve(user) { await fetch('/api/approve_user', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user})}); load(); }
+        async function reject(user) { if(confirm(`Reject ${user}?`)){ await fetch('/api/reject_user', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user})}); load(); } }
+        async function removeUser(user) { if(confirm(`Remove ${user}?`)){ await fetch('/api/remove_user', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:user})}); load(); } }
+        load(); setInterval(load, 5000);
+    </script>
+</body>
+</html>
 """
 
-# Flask Routes
+# ========== FLASK ROUTES ==========
 @app.route('/')
 def index():
     return render_template_string(HTML_TEMPLATE)
@@ -650,13 +859,10 @@ def register():
     username = data.get('username')
     password = data.get('password')
     email = data.get('email', '')
-    
     users = load_json(USERS_FILE)
     pending = load_json(PENDING_FILE)
-    
     if username in users or username in pending:
         return jsonify({'success': False, 'message': 'Username exists!'})
-    
     pending[username] = {'password': password, 'email': email, 'date': str(datetime.now()), 'approved': False}
     save_json(PENDING_FILE, pending)
     return jsonify({'success': True, 'message': 'Request sent to owner! Wait for approval.'})
@@ -666,29 +872,19 @@ def login():
     data = request.json
     username = data.get('username')
     password = data.get('password')
-    
     if username == OWNER_USERNAME and password == OWNER_PASSWORD:
         session['user'] = username
         session['is_admin'] = True
         return jsonify({'success': True, 'is_admin': True})
-    
     users = load_json(USERS_FILE)
     if username in users and users[username]['password'] == password and users[username].get('approved', False):
         session['user'] = username
         session['is_admin'] = False
         return jsonify({'success': True, 'is_admin': False})
-    
     pending = load_json(PENDING_FILE)
     if username in pending:
         return jsonify({'success': False, 'message': 'Pending owner approval'})
-    
     return jsonify({'success': False, 'message': 'Invalid credentials'})
-
-@app.route('/api/check_approval')
-def check_approval():
-    user = request.args.get('user')
-    users = load_json(USERS_FILE)
-    return jsonify({'approved': user in users and users[user].get('approved', False)})
 
 @app.route('/api/approve_user', methods=['POST'])
 def approve_user():
@@ -696,7 +892,6 @@ def approve_user():
     username = data.get('username')
     pending = load_json(PENDING_FILE)
     users = load_json(USERS_FILE)
-    
     if username in pending:
         users[username] = pending[username]
         users[username]['approved'] = True
@@ -729,10 +924,14 @@ def remove_user():
 def admin_data():
     users = load_json(USERS_FILE)
     pending = load_json(PENDING_FILE)
-    
+    settings = load_json(SETTINGS_FILE)
     user_list = [{'username': k, 'approved': v.get('approved', False), 'date': v.get('date', '')} for k, v in users.items()]
     pending_list = [{'username': k, 'email': v.get('email', ''), 'date': v.get('date', '')} for k, v in pending.items()]
-    return jsonify({'users': user_list, 'pending': pending_list})
+    return jsonify({
+        'users': user_list, 'pending': pending_list,
+        'total_users': len(users), 'approved_count': sum(1 for u in users.values() if u.get('approved')),
+        'pending_count': len(pending), 'total_uploads': settings.get('total_uploads', 0)
+    })
 
 @app.route('/api/upload', methods=['POST'])
 def upload_file():
@@ -741,59 +940,78 @@ def upload_file():
     file = request.files['file']
     if file.filename == '':
         return jsonify({'message': 'No file selected'})
-    
-    if not os.path.exists('uploads'):
-        os.makedirs('uploads')
-    file.save(os.path.join('uploads', file.filename))
-    
-    settings = load_json(SETTINGS_FILE)
-    settings['total_uploads'] = settings.get('total_uploads', 0) + 1
-    save_json(SETTINGS_FILE, settings)
-    
-    return jsonify({'message': f'Uploaded: {file.filename}'})
+    if allowed_file(file.filename):
+        file.save(os.path.join(UPLOAD_FOLDER, file.filename))
+        settings = load_json(SETTINGS_FILE)
+        settings['total_uploads'] = settings.get('total_uploads', 0) + 1
+        save_json(SETTINGS_FILE, settings)
+        return jsonify({'message': f'Uploaded: {file.filename}'})
+    return jsonify({'message': 'File type not allowed'})
 
 @app.route('/api/list_files')
 def list_files():
-    if not os.path.exists('uploads'):
+    if not os.path.exists(UPLOAD_FOLDER):
         return jsonify({'files': []})
-    files = os.listdir('uploads')
+    files = os.listdir(UPLOAD_FOLDER)
     return jsonify({'files': files})
+
+@app.route('/api/download/<filename>')
+def download_file(filename):
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    if os.path.exists(filepath):
+        return send_file(filepath, as_attachment=True)
+    return jsonify({'error': 'File not found'}), 404
+
+@app.route('/api/delete_file', methods=['POST'])
+def delete_file():
+    data = request.json
+    filename = data.get('filename')
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    if os.path.exists(filepath):
+        os.remove(filepath)
+        return jsonify({'message': f'Deleted {filename}'})
+    return jsonify({'message': 'File not found'})
+
+@app.route('/api/file_upload_status')
+def file_upload_status():
+    settings = load_json(SETTINGS_FILE)
+    return jsonify({'enabled': settings.get('file_upload_enabled', True)})
+
+@app.route('/api/toggle_file_upload', methods=['POST'])
+def toggle_file_upload():
+    data = request.json
+    settings = load_json(SETTINGS_FILE)
+    settings['file_upload_enabled'] = data.get('enabled', True)
+    save_json(SETTINGS_FILE, settings)
+    return jsonify({'enabled': settings['file_upload_enabled']})
 
 @app.route('/api/stats')
 def stats():
     users = load_json(USERS_FILE)
     pending = load_json(PENDING_FILE)
     settings = load_json(SETTINGS_FILE)
+    file_count = len(os.listdir(UPLOAD_FOLDER)) if os.path.exists(UPLOAD_FOLDER) else 0
     approved = sum(1 for u in users.values() if u.get('approved'))
     return jsonify({
-        'total_users': len(users),
-        'approved_users': approved,
-        'pending_users': len(pending),
-        'total_uploads': settings.get('total_uploads', 0)
+        'total_users': len(users), 'approved_users': approved, 'pending_users': len(pending),
+        'total_uploads': settings.get('total_uploads', 0), 'file_count': file_count,
+        'bot_locked': settings.get('bot_locked', False), 'upload_enabled': settings.get('file_upload_enabled', True)
     })
 
 @app.route('/api/server_stats')
 def server_stats():
-    file_count = len(os.listdir('uploads')) if os.path.exists('uploads') else 0
-    return jsonify({
-        'cpu': round(os.cpu_count() * 0.5, 1),
-        'ram': 512,
-        'running': True,
-        'file_count': file_count
-    })
+    file_count = len(os.listdir(UPLOAD_FOLDER)) if os.path.exists(UPLOAD_FOLDER) else 0
+    return jsonify({'cpu': round(os.cpu_count() * 0.5, 1) if os.cpu_count() else 25, 'ram': 512, 'running': True, 'file_count': file_count})
 
-@app.route('/api/ai', methods=['POST'])
-def ai():
+@app.route('/api/oggy_ai', methods=['POST'])
+def oggy_ai():
     data = request.json
     prompt = data.get('prompt', '')
-    response = call_a4f_api(prompt)
+    response = call_oggy_ai(prompt)
     return jsonify({'response': response})
 
 @app.route('/api/add_log', methods=['POST'])
 def add_log():
-    data = request.json
-    log = data.get('log', '')
-    # Store logs in memory/file if needed
     return jsonify({'success': True})
 
 @app.route('/api/logout')
@@ -803,7 +1021,6 @@ def logout():
 
 @app.route('/api/broadcast', methods=['POST'])
 def broadcast():
-    # In production, implement actual broadcast
     return jsonify({'success': True})
 
 @app.route('/api/lock_bot', methods=['POST'])
@@ -821,7 +1038,8 @@ if __name__ == '__main__':
     ║  🌐 URL: http://localhost:5000                       ║
     ║  👑 Owner Login: OGGY / OGGY@159357                  ║
     ║  📝 Users: Register -> Owner approves in Admin Panel ║
-    ║  🤖 A4F Claude Sonnet 4: WORKING                     ║
+    ║  🤖 OGGY AI: Connected to DeepAI API                 ║
+    ║  📁 File Upload: ON/OFF Toggle Available             ║
     ║  🔥 Developer: OGGY | SIN: 159357                    ║
     ╚══════════════════════════════════════════════════════╝
     """)
