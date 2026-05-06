@@ -3,9 +3,7 @@ import requests
 import json
 import os
 import random
-import subprocess
-import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 
 app = Flask(__name__)
@@ -17,7 +15,6 @@ USERS_FILE = "users.json"
 PENDING_FILE = "pending.json"
 SETTINGS_FILE = "settings.json"
 UPLOAD_FOLDER = "uploads"
-AI_TERMINAL_HISTORY = "ai_terminal.json"
 
 # Owner credentials
 OWNER_USERNAME = "OGGY"
@@ -39,7 +36,7 @@ def init_files():
         "total_commands": 0,
         "start_time": str(datetime.now()),
         "system_logs": []
-    }), (AI_TERMINAL_HISTORY, [])]:
+    })]:
         if not os.path.exists(file):
             with open(file, 'w') as f:
                 json.dump(default, f, indent=2)
@@ -77,7 +74,6 @@ def call_oggy_ai(prompt):
     except Exception as e:
         return f"⚠️ Connection error: {str(e)[:40]}"
 
-# ========== LOGIN REQUIRED DECORATOR ==========
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -104,7 +100,6 @@ HTML_TEMPLATE = """
             color: #00ff9d;
         }
         
-        /* Animated Background */
         .bg-animation {
             position: fixed;
             top: 0;
@@ -117,8 +112,8 @@ HTML_TEMPLATE = """
         
         .bg-animation span {
             position: absolute;
-            width: 4px;
-            height: 4px;
+            width: 3px;
+            height: 3px;
             background: #00ff9d;
             border-radius: 50%;
             opacity: 0.3;
@@ -142,7 +137,6 @@ HTML_TEMPLATE = """
             100% { border-color: #ff00ff; box-shadow: 0 0 30px rgba(255,0,255,0.3); }
         }
         
-        /* Login Container */
         .login-container {
             display: flex;
             justify-content: center;
@@ -234,10 +228,8 @@ HTML_TEMPLATE = """
         
         .dev-sign { text-align: center; margin-top: 30px; font-size: 0.75em; opacity: 0.5; letter-spacing: 2px; }
         
-        /* Dashboard */
         .dashboard { display: none; }
         
-        /* Header */
         .dashboard-header {
             background: rgba(0,0,0,0.9);
             border: 1px solid #00ff9d;
@@ -262,7 +254,6 @@ HTML_TEMPLATE = """
         .badge-owner { background: linear-gradient(135deg, #ff00ff, #cc00cc); color: #fff; }
         .logout-btn { background: #ff0040; width: auto; padding: 10px 25px; }
         
-        /* Stats Cards */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -283,7 +274,6 @@ HTML_TEMPLATE = """
         .stat-card .value { font-size: 2.2em; font-weight: bold; font-family: monospace; }
         .stat-card .label { font-size: 0.85em; opacity: 0.7; margin-top: 8px; letter-spacing: 1px; }
         
-        /* Toggle Row */
         .toggle-row {
             display: flex;
             justify-content: space-between;
@@ -295,7 +285,6 @@ HTML_TEMPLATE = """
             border: 1px solid #00ff9d;
         }
         
-        /* Toggle Switch */
         .toggle-switch { position: relative; display: inline-block; width: 70px; height: 36px; }
         .toggle-switch input { opacity: 0; width: 0; height: 0; }
         .slider {
@@ -309,7 +298,6 @@ HTML_TEMPLATE = """
         input:checked + .slider { background-color: #00ff9d; }
         input:checked + .slider:before { transform: translateX(34px); }
         
-        /* Button Grid */
         .button-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -329,7 +317,6 @@ HTML_TEMPLATE = """
         }
         .action-btn:hover { background: linear-gradient(135deg, #00ff9d, #00cc7d); color: #000; transform: translateY(-2px); border-color: #ff00ff; }
         
-        /* Upload Area */
         .upload-area {
             background: rgba(0,255,157,0.05);
             border: 2px dashed #00ff9d;
@@ -339,7 +326,6 @@ HTML_TEMPLATE = """
             margin: 20px 0;
         }
         
-        /* File List */
         .file-list {
             background: rgba(0,0,0,0.8);
             border-radius: 15px;
@@ -358,7 +344,6 @@ HTML_TEMPLATE = """
         .file-item:hover { background: rgba(0,255,157,0.1); }
         .file-item button { width: auto; padding: 5px 12px; margin-left: 8px; background: #ff0040; border-radius: 8px; }
         
-        /* Logs Panel */
         .logs-panel {
             background: #000;
             border: 2px solid #00ff9d;
@@ -382,7 +367,6 @@ HTML_TEMPLATE = """
         .log-line { color: #00ff9d; margin: 5px 0; border-left: 2px solid #00ff9d; padding-left: 10px; }
         .error-log { color: #ff0040; border-left-color: #ff0040; }
         
-        /* AI Terminal */
         .ai-terminal-panel {
             background: rgba(0,0,0,0.95);
             border: 2px solid #ff00ff;
@@ -510,7 +494,6 @@ HTML_TEMPLATE = """
         
         <!-- Dashboard -->
         <div id="dashboard" class="dashboard">
-            <!-- Header -->
             <div class="dashboard-header">
                 <div class="user-info">
                     <h2>🔥 OGGY HOSTING PLATFORM</h2>
@@ -519,7 +502,6 @@ HTML_TEMPLATE = """
                 <button class="btn logout-btn" onclick="logout()">🚪 LOGOUT</button>
             </div>
             
-            <!-- Stats Cards -->
             <div class="stats-grid">
                 <div class="stat-card" onclick="refreshStats()">
                     <div class="icon">⏱</div>
@@ -543,7 +525,6 @@ HTML_TEMPLATE = """
                 </div>
             </div>
             
-            <!-- File Upload Toggle -->
             <div class="toggle-row">
                 <span><strong>📁 FILE UPLOAD SYSTEM</strong></span>
                 <label class="toggle-switch">
@@ -553,10 +534,8 @@ HTML_TEMPLATE = """
                 <span id="toggleStatus">Loading...</span>
             </div>
             
-            <!-- Action Buttons -->
             <div id="buttonGrid" class="button-grid"></div>
             
-            <!-- Upload Section -->
             <div class="upload-area">
                 <input type="file" id="fileInput" style="display: none;" multiple>
                 <button class="action-btn" id="uploadBtn" onclick="document.getElementById('fileInput').click()">📤 UPLOAD FILES</button>
@@ -564,7 +543,6 @@ HTML_TEMPLATE = """
                 <div id="fileListContainer" class="file-list" style="display: none;"></div>
             </div>
             
-            <!-- System Logs -->
             <div class="logs-panel">
                 <div class="logs-header">📋 SYSTEM LOGS</div>
                 <div class="logs-body" id="logsBody">
@@ -573,10 +551,9 @@ HTML_TEMPLATE = """
                 </div>
             </div>
             
-            <!-- AI Terminal -->
             <div class="ai-terminal-panel">
                 <div class="ai-terminal-header" onclick="toggleAITerminal()">
-                    <span>🤖 OGGY AI TERMINAL - Claude Sonnet 4 Powered</span>
+                    <span>🤖 OGGY AI TERMINAL - DeepAI Powered</span>
                     <span>▼</span>
                 </div>
                 <div id="aiTerminalBody" class="ai-terminal-body">
@@ -605,7 +582,6 @@ HTML_TEMPLATE = """
         let uptimeInterval;
         let startTime = new Date();
         
-        // Background animation
         for(let i = 0; i < 100; i++) {
             let star = document.createElement('span');
             star.style.left = Math.random() * 100 + '%';
@@ -689,7 +665,6 @@ HTML_TEMPLATE = """
             setTimeout(() => { errorDiv.style.display = 'none'; }, 5000);
         }
         
-        // Register
         document.getElementById('registerForm')?.addEventListener('submit', async (e) => {
             e.preventDefault();
             let username = document.getElementById('regUsername').value;
@@ -719,7 +694,6 @@ HTML_TEMPLATE = """
             }
         });
         
-        // Login
         document.getElementById('loginForm')?.addEventListener('submit', async (e) => {
             e.preventDefault();
             let username = document.getElementById('loginUsername').value;
@@ -885,7 +859,6 @@ HTML_TEMPLATE = """
             container.style.display = 'block';
             let html = '<h4>📁 YOUR FILES:</h4>';
             data.files.forEach(f => {
-                let size = '?';
                 html += `<div class="file-item"><span>📄 ${f}</span><div><button onclick="downloadFile('${f}')">📥</button><button onclick="deleteFile('${f}')">🗑</button></div></div>`;
             });
             container.innerHTML = html;
@@ -972,14 +945,14 @@ ADMIN_PANEL_HTML = """
     <h2>⏳ PENDING APPROVALS</h2>
     <table id="pendingTable"><tr><th>Username</th><th>Email</th><th>Date</th><th>Action</th></tr></table>
     <h2>✅ REGISTERED USERS</h2>
-    <table id="usersTable"><tr><th>Username</th><th>Status</th><th>Created</th><th>Action</th></tr></table>
+    <table id="usersTable"><tr><th>Username</th><th>Status</th><th>Created</th><th>Action</th></tr></tr>
     <script>
         async function load() {
             let r=await fetch('/api/admin_data'); let d=await r.json();
             document.getElementById('quickStats').innerHTML=`👥 Total: ${d.total_users} | ✅ Approved: ${d.approved_count} | ⏳ Pending: ${d.pending_count} | 📁 Uploads: ${d.total_uploads}`;
-            let ph=''; d.pending.forEach(u=>{ph+=`<tr><td>${u.username}</td><td>${u.email||'-'}</td><td>${u.date}</td><td><button onclick="approve('${u.username}')">✅ Approve</button><button onclick="reject('${u.username}')" style="background:#ff0040">❌ Reject</button></td></tr>`;});
+            let ph=''; d.pending.forEach(u=>{ph+=`</table><td>${u.username}${u.email||'-'}${u.date}<button onclick="approve('${u.username}')">✅ Approve</button><button onclick="reject('${u.username}')" style="background:#ff0040">❌ Reject</button>`});
             document.getElementById('pendingTable').innerHTML='<tr><th>Username</th><th>Email</th><th>Date</th><th>Action</th></tr>'+ (ph||'<tr><td colspan="4">No pending requests</td></tr>');
-            let uh=''; d.users.forEach(u=>{uh+=`<tr><td>${u.username}</td><td class="${u.approved?'approved':'pending'}">${u.approved?'✅ Approved':'⏳ Pending'}</td><td>${u.date||'-'}</td><td>${!u.approved?`<button onclick="approve('${u.username}')">Approve</button>`:''}<button onclick="removeUser('${u.username}')" style="background:#ff0040">🗑 Remove</button></td></tr>`;});
+            let uh=''; d.users.forEach(u=>{uh+=`<tr><td>${u.username}</td><td class="${u.approved?'approved':'pending'}">${u.approved?'✅ Approved':'⏳ Pending'}</td><td>${u.date||'-'}</td><td>${!u.approved?`<button onclick="approve('${u.username}')">Approve</button>`:''}<button onclick="removeUser('${u.username}')" style="background:#ff0040">🗑 Remove</button></td></tr>`});
             document.getElementById('usersTable').innerHTML='<tr><th>Username</th><th>Status</th><th>Created</th><th>Action</th></tr>'+uh;
         }
         async function approve(u){ await fetch('/api/approve_user',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u})}); load(); }
@@ -1198,8 +1171,6 @@ def lock_bot():
     return jsonify({'locked': settings['bot_locked']})
 
 if __name__ == '__main__':
-    from datetime import timedelta
-    app.permanent_session_lifetime = timedelta(days=7)
     print("""
     ╔══════════════════════════════════════════════════════════════════════╗
     ║                                                                      ║
@@ -1212,7 +1183,7 @@ if __name__ == '__main__':
     ║     👑 OWNER LOGIN:                                                  ║
     ║        ┌─────────────────────────────────┐                          ║
     ║        │  Username: OGGY                  │                          ║
-    ║        │  Password:            │                          ║
+    ║        │  Password: OGGY@159357           │                          ║
     ║        └─────────────────────────────────┘                          ║
     ║                                                                      ║
     ║     📝 USER REGISTRATION:                                            ║
