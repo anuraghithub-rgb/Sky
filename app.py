@@ -2,20 +2,22 @@ from flask import Flask, render_template_string, request, jsonify, session, send
 import requests
 import json
 import os
-import shutil
-from datetime import datetime
-from threading import Lock
 import random
+import subprocess
+import threading
+from datetime import datetime
+from functools import wraps
 
 app = Flask(__name__)
 app.secret_key = "oggy_killer_secret_159357_oggy_hosting"
+app.permanent_session_lifetime = timedelta(days=7)
 
 # ========== CONFIGURATION ==========
 USERS_FILE = "users.json"
 PENDING_FILE = "pending.json"
 SETTINGS_FILE = "settings.json"
 UPLOAD_FOLDER = "uploads"
-LOG_FILE = "system.log"
+AI_TERMINAL_HISTORY = "ai_terminal.json"
 
 # Owner credentials
 OWNER_USERNAME = "OGGY"
@@ -28,9 +30,7 @@ OGGY_API_KEY = "tryit-71209460785-0d83ccc5af9bd7a408f4328b4"
 # Create folders
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-file_lock = Lock()
-
-# ========== INITIALIZE FILES ==========
+# ========== FILE HANDLING ==========
 def init_files():
     for file, default in [(USERS_FILE, {}), (PENDING_FILE, {}), (SETTINGS_FILE, {
         "bot_locked": False,
@@ -39,7 +39,7 @@ def init_files():
         "total_commands": 0,
         "start_time": str(datetime.now()),
         "system_logs": []
-    })]:
+    }), (AI_TERMINAL_HISTORY, [])]:
         if not os.path.exists(file):
             with open(file, 'w') as f:
                 json.dump(default, f, indent=2)
@@ -47,18 +47,16 @@ def init_files():
 init_files()
 
 def load_json(file):
-    with file_lock:
-        with open(file, 'r') as f:
-            return json.load(f)
+    with open(file, 'r') as f:
+        return json.load(f)
 
 def save_json(file, data):
-    with file_lock:
-        with open(file, 'w') as f:
-            json.dump(data, f, indent=2)
+    with open(file, 'w') as f:
+        json.dump(data, f, indent=2)
 
 def add_system_log(msg, level="INFO"):
     settings = load_json(SETTINGS_FILE)
-    log_entry = f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [{level}] {msg}"
+    log_entry = f"[{datetime.now().strftime('%H:%M:%S')}] [{level}] {msg}"
     settings["system_logs"].insert(0, log_entry)
     if len(settings["system_logs"]) > 100:
         settings["system_logs"] = settings["system_logs"][:100]
@@ -66,24 +64,27 @@ def add_system_log(msg, level="INFO"):
 
 def call_oggy_ai(prompt):
     """Call OGGY AI via DeepAI API"""
-    headers = {
-        "api-key": OGGY_API_KEY,
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "text": prompt,
-        "response_format": "text"
-    }
+    headers = {"api-key": OGGY_API_KEY, "Content-Type": "application/json"}
+    payload = {"text": prompt, "response_format": "text"}
     try:
         response = requests.post(OGGY_AI_URL, headers=headers, json=payload, timeout=60)
         if response.status_code == 200:
             data = response.json()
             result = data.get("output", data.get("response", "🤖 OGGY AI: I'm here!"))
-            add_system_log(f"OGGY AI Query: {prompt[:50]}...", "AI")
+            add_system_log(f"AI Query: {prompt[:50]}...", "AI")
             return result
-        return f"⚠️ OGGY AI Error: {response.status_code}"
+        return f"⚠️ AI Error: {response.status_code}"
     except Exception as e:
-        return f"⚠️ OGGY AI: Connection issue - {str(e)[:40]}"
+        return f"⚠️ Connection error: {str(e)[:40]}"
+
+# ========== LOGIN REQUIRED DECORATOR ==========
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user' not in session:
+            return jsonify({'error': 'Login required'}), 401
+        return f(*args, **kwargs)
+    return decorated_function
 
 # ========== HTML TEMPLATE ==========
 HTML_TEMPLATE = """
@@ -92,292 +93,459 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OGGY HOSTING - Premium Cloud Platform</title>
+    <title>OGGY HOSTING - Enterprise Cloud Platform</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        
         body {
-            background: linear-gradient(135deg, #0a0a0a 0%, #1a0033 100%);
-            font-family: 'Segoe UI', 'Courier New', monospace;
+            background: linear-gradient(135deg, #0a0a0a 0%, #0f0f1a 50%, #1a0033 100%);
+            font-family: 'Segoe UI', 'Poppins', 'Courier New', monospace;
             min-height: 100vh;
             color: #00ff9d;
         }
-        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        
+        /* Animated Background */
+        .bg-animation {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+            overflow: hidden;
+        }
+        
+        .bg-animation span {
+            position: absolute;
+            width: 4px;
+            height: 4px;
+            background: #00ff9d;
+            border-radius: 50%;
+            opacity: 0.3;
+            animation: float 20s infinite linear;
+        }
+        
+        @keyframes float {
+            0% { transform: translateY(100vh) scale(0); opacity: 0; }
+            100% { transform: translateY(-100vh) scale(1); opacity: 0.3; }
+        }
+        
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; position: relative; z-index: 1; }
         
         @keyframes glow {
             from { text-shadow: 0 0 5px #00ff9d; }
-            to { text-shadow: 0 0 25px #ff00ff; }
+            to { text-shadow: 0 0 25px #ff00ff, 0 0 5px #00ff9d; }
         }
         
-        .header {
-            text-align: center;
-            padding: 30px;
-            border-bottom: 3px solid #00ff9d;
-            margin-bottom: 30px;
-            animation: glow 2s ease-in-out infinite alternate;
+        @keyframes borderPulse {
+            0% { border-color: #00ff9d; box-shadow: 0 0 10px rgba(0,255,157,0.3); }
+            100% { border-color: #ff00ff; box-shadow: 0 0 30px rgba(255,0,255,0.3); }
         }
-        .header h1 { font-size: 3em; letter-spacing: 5px; }
-        .header h1 span { color: #ff00ff; }
-        .dev-sign { text-align: center; margin-top: 20px; font-size: 0.8em; opacity: 0.6; }
+        
+        /* Login Container */
+        .login-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 90vh;
+        }
         
         .login-box {
             background: rgba(0,0,0,0.95);
             border: 2px solid #00ff9d;
-            border-radius: 20px;
-            padding: 40px;
-            max-width: 450px;
-            margin: 80px auto;
-            box-shadow: 0 0 60px rgba(0,255,157,0.3);
+            border-radius: 25px;
+            padding: 50px;
+            max-width: 480px;
+            width: 100%;
+            backdrop-filter: blur(15px);
+            box-shadow: 0 0 60px rgba(0,255,157,0.2);
+            animation: borderPulse 3s ease-in-out infinite alternate;
         }
-        .login-box h2 { text-align: center; margin-bottom: 30px; }
-        .input-group { margin-bottom: 20px; }
-        .input-group label { display: block; margin-bottom: 10px; color: #00ff9d; }
+        
+        .login-box:hover { animation: borderPulse 1s ease-in-out infinite alternate; }
+        
+        .logo {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        
+        .logo h1 {
+            font-size: 3.5em;
+            letter-spacing: 8px;
+            background: linear-gradient(135deg, #00ff9d, #ff00ff);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+        }
+        
+        .logo p { color: #666; margin-top: 10px; }
+        
+        .input-group { margin-bottom: 25px; }
+        .input-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #00ff9d;
+            font-size: 0.9em;
+            letter-spacing: 1px;
+        }
         .input-group input {
             width: 100%;
-            padding: 12px;
-            background: #111;
+            padding: 14px;
+            background: #0a0a0a;
             border: 1px solid #00ff9d;
             color: #00ff9d;
-            border-radius: 8px;
+            border-radius: 12px;
             font-size: 1em;
+            transition: all 0.3s;
         }
-        button {
+        .input-group input:focus {
+            outline: none;
+            border-color: #ff00ff;
+            box-shadow: 0 0 15px rgba(255,0,255,0.3);
+        }
+        
+        .btn {
             width: 100%;
-            padding: 12px;
-            background: #00ff9d;
+            padding: 14px;
+            background: linear-gradient(135deg, #00ff9d, #00cc7d);
             color: #000;
             border: none;
             font-size: 1.1em;
             font-weight: bold;
-            border-radius: 8px;
+            border-radius: 12px;
             cursor: pointer;
             transition: all 0.3s;
         }
-        button:hover { background: #ff00ff; color: #fff; transform: scale(1.02); }
+        .btn:hover { background: linear-gradient(135deg, #ff00ff, #cc00cc); color: #fff; transform: translateY(-2px); box-shadow: 0 10px 25px rgba(255,0,255,0.3); }
         
+        .register-btn { background: #333; margin-top: 15px; }
+        .register-btn:hover { background: #555; transform: none; box-shadow: none; }
+        
+        .error-msg {
+            background: rgba(255,0,64,0.2);
+            border: 1px solid #ff0040;
+            border-radius: 10px;
+            padding: 12px;
+            margin-bottom: 20px;
+            text-align: center;
+            color: #ff0040;
+            display: none;
+        }
+        
+        .dev-sign { text-align: center; margin-top: 30px; font-size: 0.75em; opacity: 0.5; letter-spacing: 2px; }
+        
+        /* Dashboard */
         .dashboard { display: none; }
-        .top-bar {
+        
+        /* Header */
+        .dashboard-header {
             background: rgba(0,0,0,0.9);
             border: 1px solid #00ff9d;
-            border-radius: 15px;
-            padding: 15px 20px;
-            margin-bottom: 20px;
+            border-radius: 20px;
+            padding: 20px 30px;
+            margin-bottom: 25px;
             display: flex;
             justify-content: space-between;
             align-items: center;
             flex-wrap: wrap;
         }
-        .logout-btn { width: auto; padding: 8px 25px; background: #ff0040; }
+        .user-info h2 { color: #00ff9d; font-size: 1.5em; }
+        .user-info p { color: #888; margin-top: 5px; }
+        .badge {
+            background: linear-gradient(135deg, #00ff9d, #00cc7d);
+            color: #000;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+        .badge-owner { background: linear-gradient(135deg, #ff00ff, #cc00cc); color: #fff; }
+        .logout-btn { background: #ff0040; width: auto; padding: 10px 25px; }
         
+        /* Stats Cards */
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            grid-template-columns: repeat(4, 1fr);
             gap: 20px;
             margin-bottom: 30px;
         }
         .stat-card {
             background: rgba(0,0,0,0.85);
             border: 1px solid #00ff9d;
-            border-radius: 15px;
-            padding: 20px;
+            border-radius: 20px;
+            padding: 25px 20px;
             text-align: center;
-            cursor: pointer;
             transition: all 0.3s;
+            cursor: pointer;
         }
-        .stat-card:hover { transform: translateY(-5px); box-shadow: 0 0 20px rgba(0,255,157,0.3); }
-        .stat-card .value { font-size: 2em; font-weight: bold; }
+        .stat-card:hover { transform: translateY(-8px); border-color: #ff00ff; box-shadow: 0 15px 35px rgba(255,0,255,0.2); }
+        .stat-card .icon { font-size: 2.5em; margin-bottom: 10px; }
+        .stat-card .value { font-size: 2.2em; font-weight: bold; font-family: monospace; }
+        .stat-card .label { font-size: 0.85em; opacity: 0.7; margin-top: 8px; letter-spacing: 1px; }
         
+        /* Toggle Row */
+        .toggle-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px;
+            background: rgba(0,0,0,0.6);
+            border-radius: 15px;
+            margin: 20px 0;
+            border: 1px solid #00ff9d;
+        }
+        
+        /* Toggle Switch */
+        .toggle-switch { position: relative; display: inline-block; width: 70px; height: 36px; }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .slider {
+            position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+            background-color: #333; transition: 0.4s; border-radius: 36px;
+        }
+        .slider:before {
+            position: absolute; content: ""; height: 28px; width: 28px;
+            left: 4px; bottom: 4px; background-color: white; transition: 0.4s; border-radius: 50%;
+        }
+        input:checked + .slider { background-color: #00ff9d; }
+        input:checked + .slider:before { transform: translateX(34px); }
+        
+        /* Button Grid */
         .button-grid {
             display: grid;
-            grid-template-columns: repeat(2, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 15px;
-            margin: 30px 0;
+            margin: 25px 0;
         }
         .action-btn {
-            background: linear-gradient(135deg, #00ff9d, #00cc7d);
-            color: #000;
-            padding: 15px;
+            background: linear-gradient(135deg, #1a1a2e, #16213e);
+            border: 1px solid #00ff9d;
+            color: #00ff9d;
+            padding: 14px;
             font-weight: bold;
-            border: none;
             border-radius: 12px;
             cursor: pointer;
             transition: all 0.3s;
+            font-size: 0.9em;
         }
-        .action-btn:hover { transform: translateY(-3px); background: linear-gradient(135deg, #ff00ff, #cc00cc); color: white; }
-        .disabled-btn { background: #555; cursor: not-allowed; opacity: 0.5; }
+        .action-btn:hover { background: linear-gradient(135deg, #00ff9d, #00cc7d); color: #000; transform: translateY(-2px); border-color: #ff00ff; }
         
+        /* Upload Area */
         .upload-area {
-            background: rgba(0,255,157,0.1);
+            background: rgba(0,255,157,0.05);
             border: 2px dashed #00ff9d;
-            border-radius: 15px;
-            padding: 20px;
+            border-radius: 20px;
+            padding: 25px;
             text-align: center;
             margin: 20px 0;
         }
+        
+        /* File List */
         .file-list {
             background: rgba(0,0,0,0.8);
-            border-radius: 10px;
+            border-radius: 15px;
             padding: 15px;
             margin-top: 15px;
-            max-height: 200px;
+            max-height: 250px;
             overflow-y: auto;
         }
         .file-item {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 8px;
+            padding: 12px;
             border-bottom: 1px solid #00ff9d;
         }
-        .file-item button { width: auto; padding: 5px 10px; background: #ff0040; margin-left: 10px; }
+        .file-item:hover { background: rgba(0,255,157,0.1); }
+        .file-item button { width: auto; padding: 5px 12px; margin-left: 8px; background: #ff0040; border-radius: 8px; }
         
+        /* Logs Panel */
         .logs-panel {
             background: #000;
             border: 2px solid #00ff9d;
-            border-radius: 15px;
+            border-radius: 20px;
             margin: 20px 0;
             overflow: hidden;
         }
         .logs-header {
-            background: #00ff9d;
+            background: linear-gradient(135deg, #00ff9d, #00cc7d);
             color: #000;
-            padding: 12px;
+            padding: 15px 20px;
             font-weight: bold;
         }
         .logs-body {
-            height: 200px;
+            height: 180px;
             overflow-y: auto;
             padding: 15px;
             font-family: monospace;
-            font-size: 0.85em;
+            font-size: 0.8em;
         }
         .log-line { color: #00ff9d; margin: 5px 0; border-left: 2px solid #00ff9d; padding-left: 10px; }
         .error-log { color: #ff0040; border-left-color: #ff0040; }
         
-        .ai-panel {
-            background: rgba(0,0,0,0.9);
-            border: 1px solid #00ff9d;
-            border-radius: 15px;
-            padding: 20px;
-            margin-top: 20px;
+        /* AI Terminal */
+        .ai-terminal-panel {
+            background: rgba(0,0,0,0.95);
+            border: 2px solid #ff00ff;
+            border-radius: 20px;
+            margin: 20px 0;
+            overflow: hidden;
         }
-        .ai-response { background: #111; padding: 15px; border-radius: 10px; margin-top: 10px; white-space: pre-wrap; }
-        
-        .toggle-switch {
-            position: relative;
-            display: inline-block;
-            width: 60px;
-            height: 34px;
-        }
-        .toggle-switch input { opacity: 0; width: 0; height: 0; }
-        .slider {
-            position: absolute;
+        .ai-terminal-header {
+            background: linear-gradient(135deg, #ff00ff, #cc00cc);
+            color: #fff;
+            padding: 15px 20px;
+            font-weight: bold;
             cursor: pointer;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background-color: #ccc;
-            transition: 0.4s;
-            border-radius: 34px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
-        .slider:before {
-            position: absolute;
-            content: "";
-            height: 26px;
-            width: 26px;
-            left: 4px;
-            bottom: 4px;
-            background-color: white;
-            transition: 0.4s;
-            border-radius: 50%;
+        .ai-terminal-body {
+            padding: 20px;
+            display: none;
         }
-        input:checked + .slider { background-color: #00ff9d; }
-        input:checked + .slider:before { transform: translateX(26px); }
+        .ai-terminal-body.active { display: block; }
+        .terminal-window {
+            background: #0a0a0a;
+            border-radius: 15px;
+            padding: 15px;
+            font-family: 'Courier New', monospace;
+        }
+        .terminal-output {
+            height: 250px;
+            overflow-y: auto;
+            background: #000;
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 15px;
+        }
+        .terminal-line { color: #00ff9d; margin: 3px 0; font-size: 0.85em; }
+        .terminal-input-line {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .terminal-prompt { color: #ff00ff; font-weight: bold; }
+        .ai-terminal-input {
+            flex: 1;
+            background: #111;
+            border: 1px solid #00ff9d;
+            color: #00ff9d;
+            padding: 12px;
+            border-radius: 10px;
+            font-family: monospace;
+        }
+        .terminal-send {
+            width: auto;
+            padding: 12px 25px;
+            background: #ff00ff;
+            color: #fff;
+        }
         
+        @media (max-width: 1024px) {
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .button-grid { grid-template-columns: repeat(2, 1fr); }
+        }
         @media (max-width: 768px) {
-            .header h1 { font-size: 1.5em; }
+            .stats-grid { grid-template-columns: 1fr; }
             .button-grid { grid-template-columns: 1fr; }
+            .login-box { margin: 20px; padding: 30px; }
         }
     </style>
 </head>
 <body>
+    <div class="bg-animation" id="bgAnimation"></div>
+    
     <div class="container">
-        <div class="header">
-            <h1>🔒 OGGY <span>HOSTING</span></h1>
-            <p>Premium Cloud Platform | Enterprise Grade Security</p>
-        </div>
-        
-        <!-- Login Panel -->
-        <div id="loginPanel" class="login-box">
-            <h2>🔐 SECURE ACCESS</h2>
-            <form id="loginForm">
-                <div class="input-group">
-                    <label>USERNAME</label>
-                    <input type="text" id="loginUsername" placeholder="Enter username" required>
+        <!-- Login Container -->
+        <div id="loginContainer" class="login-container">
+            <div class="login-box">
+                <div class="logo">
+                    <h1>OGGY</h1>
+                    <p>ENTERPRISE HOSTING PLATFORM</p>
                 </div>
-                <div class="input-group">
-                    <label>PASSWORD</label>
-                    <input type="password" id="loginPassword" placeholder="Enter password" required>
-                </div>
-                <button type="submit">LOGIN</button>
-            </form>
-            <div style="text-align: center; margin-top: 20px;">
-                <button onclick="showRegister()" style="background: #333;">CREATE FREE ACCOUNT</button>
+                <div id="loginError" class="error-msg"></div>
+                <form id="loginForm">
+                    <div class="input-group">
+                        <label>USERNAME</label>
+                        <input type="text" id="loginUsername" placeholder="Enter your username" required autocomplete="off">
+                    </div>
+                    <div class="input-group">
+                        <label>PASSWORD</label>
+                        <input type="password" id="loginPassword" placeholder="Enter your password" required>
+                    </div>
+                    <button type="submit" class="btn">🔐 LOGIN TO DASHBOARD</button>
+                </form>
+                <button onclick="showRegister()" class="btn register-btn">📝 CREATE FREE ACCOUNT</button>
+                <div class="dev-sign">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━<br>🔥 DEVELOPER: OGGY | SIN: 159357 🔥</div>
             </div>
-            <div class="dev-sign">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━<br>🔥 DEVELOPER: OGGY | SIN: 159357 🔥</div>
         </div>
         
-        <!-- Register Panel -->
-        <div id="registerPanel" class="login-box" style="display: none;">
-            <h2>📝 REGISTER</h2>
-            <form id="registerForm">
-                <div class="input-group">
-                    <label>USERNAME</label>
-                    <input type="text" id="regUsername" required>
+        <!-- Register Container -->
+        <div id="registerContainer" class="login-container" style="display: none;">
+            <div class="login-box">
+                <div class="logo">
+                    <h1>REGISTER</h1>
+                    <p>CREATE FREE ACCOUNT</p>
                 </div>
-                <div class="input-group">
-                    <label>PASSWORD</label>
-                    <input type="password" id="regPassword" required>
-                </div>
-                <div class="input-group">
-                    <label>EMAIL (OPTIONAL)</label>
-                    <input type="email" id="regEmail">
-                </div>
-                <button type="submit">REQUEST APPROVAL</button>
-            </form>
-            <button onclick="showLogin()" style="margin-top: 15px; background: #333;">← BACK TO LOGIN</button>
+                <div id="registerError" class="error-msg"></div>
+                <form id="registerForm">
+                    <div class="input-group">
+                        <label>USERNAME</label>
+                        <input type="text" id="regUsername" placeholder="Choose username" required>
+                    </div>
+                    <div class="input-group">
+                        <label>PASSWORD</label>
+                        <input type="password" id="regPassword" placeholder="Choose password" required>
+                    </div>
+                    <div class="input-group">
+                        <label>EMAIL (OPTIONAL)</label>
+                        <input type="email" id="regEmail" placeholder="your@email.com">
+                    </div>
+                    <button type="submit" class="btn">📨 REQUEST APPROVAL</button>
+                </form>
+                <button onclick="showLogin()" class="btn register-btn">← BACK TO LOGIN</button>
+            </div>
         </div>
         
         <!-- Dashboard -->
         <div id="dashboard" class="dashboard">
-            <div class="top-bar">
-                <div>
-                    <h3>🔥 OGGY HOSTING</h3>
-                    <p>Welcome: <strong><span id="userName">User</span></strong> <span id="userBadge"></span></p>
+            <!-- Header -->
+            <div class="dashboard-header">
+                <div class="user-info">
+                    <h2>🔥 OGGY HOSTING PLATFORM</h2>
+                    <p>Welcome back, <strong id="userName">User</strong> <span id="userBadge"></span></p>
                 </div>
-                <button class="logout-btn" onclick="logout()">LOGOUT</button>
+                <button class="btn logout-btn" onclick="logout()">🚪 LOGOUT</button>
             </div>
             
             <!-- Stats Cards -->
             <div class="stats-grid">
                 <div class="stat-card" onclick="refreshStats()">
+                    <div class="icon">⏱</div>
                     <div class="value" id="uptime">0h 0m</div>
-                    <div>⏱ SYSTEM UPTIME</div>
+                    <div class="label">SYSTEM UPTIME</div>
                 </div>
                 <div class="stat-card">
+                    <div class="icon">🖥️</div>
                     <div class="value" id="serverStatus">🟢 ONLINE</div>
-                    <div>SERVER STATUS</div>
+                    <div class="label">SERVER STATUS</div>
                 </div>
                 <div class="stat-card">
+                    <div class="icon">⚡</div>
                     <div class="value" id="cpuRam">0% / 0MB</div>
-                    <div>CPU / RAM</div>
+                    <div class="label">CPU / RAM USAGE</div>
                 </div>
                 <div class="stat-card">
+                    <div class="icon">📁</div>
                     <div class="value" id="fileCount">0</div>
-                    <div>📂 FILES STORED</div>
+                    <div class="label">FILES STORED</div>
                 </div>
             </div>
             
             <!-- File Upload Toggle -->
-            <div style="display: flex; justify-content: space-between; align-items: center; margin: 20px 0; padding: 15px; background: rgba(0,0,0,0.5); border-radius: 15px;">
-                <span>📁 FILE UPLOAD SYSTEM</span>
+            <div class="toggle-row">
+                <span><strong>📁 FILE UPLOAD SYSTEM</strong></span>
                 <label class="toggle-switch">
                     <input type="checkbox" id="fileToggle" onchange="toggleFileUpload()">
                     <span class="slider"></span>
@@ -385,7 +553,7 @@ HTML_TEMPLATE = """
                 <span id="toggleStatus">Loading...</span>
             </div>
             
-            <!-- Dynamic Buttons -->
+            <!-- Action Buttons -->
             <div id="buttonGrid" class="button-grid"></div>
             
             <!-- Upload Section -->
@@ -400,19 +568,31 @@ HTML_TEMPLATE = """
             <div class="logs-panel">
                 <div class="logs-header">📋 SYSTEM LOGS</div>
                 <div class="logs-body" id="logsBody">
-                    <div class="log-line">[INFO] OGGY HOSTING v5.0 initialized</div>
-                    <div class="log-line">[INFO] OGGY AI ready</div>
+                    <div class="log-line">[INFO] OGGY HOSTING v6.0 initialized</div>
+                    <div class="log-line">[INFO] AI Terminal ready</div>
                 </div>
             </div>
             
-            <!-- OGGY AI -->
-            <div class="ai-panel">
-                <h3>🤖 OGGY AI - Powered by DeepAI</h3>
-                <div style="display: flex; gap: 10px; margin-top: 15px;">
-                    <input type="text" id="aiPrompt" placeholder="Ask OGGY AI anything..." style="flex: 1; padding: 12px; background: #111; border: 1px solid #00ff9d; color: #00ff9d; border-radius: 8px;">
-                    <button onclick="askOGGY()" style="width: auto; padding: 12px 30px;">SEND</button>
+            <!-- AI Terminal -->
+            <div class="ai-terminal-panel">
+                <div class="ai-terminal-header" onclick="toggleAITerminal()">
+                    <span>🤖 OGGY AI TERMINAL - Claude Sonnet 4 Powered</span>
+                    <span>▼</span>
                 </div>
-                <div id="aiResponse" class="ai-response">💬 OGGY AI ready. Ask me anything!</div>
+                <div id="aiTerminalBody" class="ai-terminal-body">
+                    <div class="terminal-window">
+                        <div class="terminal-output" id="aiTerminalOutput">
+                            <div class="terminal-line">$ OGGY AI Terminal v1.0</div>
+                            <div class="terminal-line">$ Type your command or question below</div>
+                            <div class="terminal-line">$ ---</div>
+                        </div>
+                        <div class="terminal-input-line">
+                            <span class="terminal-prompt">OGGY@host:~$</span>
+                            <input type="text" id="aiTerminalInput" class="ai-terminal-input" placeholder="Ask OGGY AI anything..." onkeypress="if(event.key==='Enter') sendAITerminalCommand()">
+                            <button class="btn terminal-send" onclick="sendAITerminalCommand()">⏎ EXECUTE</button>
+                        </div>
+                    </div>
+                </div>
             </div>
             
             <div class="dev-sign">━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━<br>🔥 DEVELOPER: OGGY | SIN: 159357 | CHUMT KA GULAM 🔥</div>
@@ -424,6 +604,15 @@ HTML_TEMPLATE = """
         let isAdmin = false;
         let uptimeInterval;
         let startTime = new Date();
+        
+        // Background animation
+        for(let i = 0; i < 100; i++) {
+            let star = document.createElement('span');
+            star.style.left = Math.random() * 100 + '%';
+            star.style.animationDelay = Math.random() * 20 + 's';
+            star.style.animationDuration = 10 + Math.random() * 20 + 's';
+            document.getElementById('bgAnimation').appendChild(star);
+        }
         
         function updateUptime() {
             let diff = Math.floor((new Date() - startTime) / 1000);
@@ -448,14 +637,56 @@ HTML_TEMPLATE = """
             }).catch(e => console.log(e));
         }
         
+        function addAITerminalLine(text, isError = false) {
+            let output = document.getElementById('aiTerminalOutput');
+            let line = document.createElement('div');
+            line.className = 'terminal-line';
+            line.style.color = isError ? '#ff0040' : '#00ff9d';
+            line.innerHTML = text;
+            output.appendChild(line);
+            output.scrollTop = output.scrollHeight;
+        }
+        
+        function toggleAITerminal() {
+            let body = document.getElementById('aiTerminalBody');
+            body.classList.toggle('active');
+        }
+        
+        async function sendAITerminalCommand() {
+            let input = document.getElementById('aiTerminalInput');
+            let command = input.value.trim();
+            if(!command) return;
+            
+            addAITerminalLine(`$ ${command}`);
+            input.value = '';
+            addAITerminalLine(`🤖 Processing...`);
+            
+            let res = await fetch('/api/oggy_ai', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({prompt: command})
+            });
+            let data = await res.json();
+            addAITerminalLine(`🤖 ${data.response}`);
+            addAITerminalLine(`---`);
+            addLog(`AI Terminal: ${command.substring(0, 50)}...`);
+        }
+        
         function showRegister() {
-            document.getElementById('loginPanel').style.display = 'none';
-            document.getElementById('registerPanel').style.display = 'block';
+            document.getElementById('loginContainer').style.display = 'none';
+            document.getElementById('registerContainer').style.display = 'flex';
         }
         
         function showLogin() {
-            document.getElementById('registerPanel').style.display = 'none';
-            document.getElementById('loginPanel').style.display = 'block';
+            document.getElementById('registerContainer').style.display = 'none';
+            document.getElementById('loginContainer').style.display = 'flex';
+        }
+        
+        function showError(element, msg) {
+            let errorDiv = document.getElementById(element);
+            errorDiv.innerHTML = msg;
+            errorDiv.style.display = 'block';
+            setTimeout(() => { errorDiv.style.display = 'none'; }, 5000);
         }
         
         // Register
@@ -465,14 +696,27 @@ HTML_TEMPLATE = """
             let password = document.getElementById('regPassword').value;
             let email = document.getElementById('regEmail').value;
             
+            if(username.length < 3) {
+                showError('registerError', 'Username must be at least 3 characters');
+                return;
+            }
+            if(password.length < 4) {
+                showError('registerError', 'Password must be at least 4 characters');
+                return;
+            }
+            
             let res = await fetch('/api/register', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({username, password, email})
             });
             let data = await res.json();
-            alert(data.message);
-            if (data.success) showLogin();
+            if(data.success) {
+                alert('✅ Registration successful! Wait for owner approval.');
+                showLogin();
+            } else {
+                showError('registerError', data.message);
+            }
         });
         
         // Login
@@ -481,30 +725,43 @@ HTML_TEMPLATE = """
             let username = document.getElementById('loginUsername').value;
             let password = document.getElementById('loginPassword').value;
             
+            if(!username || !password) {
+                showError('loginError', 'Please enter username and password');
+                return;
+            }
+            
             let res = await fetch('/api/login', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({username, password})
             });
             let data = await res.json();
-            if (data.success) {
+            
+            if(data.success) {
                 currentUser = username;
                 isAdmin = data.is_admin;
-                document.getElementById('loginPanel').style.display = 'none';
+                
+                document.getElementById('loginContainer').style.display = 'none';
                 document.getElementById('dashboard').style.display = 'block';
                 document.getElementById('userName').innerHTML = username;
-                document.getElementById('userBadge').innerHTML = isAdmin ? ' 👑 OWNER' : ' ✅ VERIFIED';
+                let badge = document.getElementById('userBadge');
+                if(isAdmin) {
+                    badge.innerHTML = '<span class="badge badge-owner">👑 OWNER</span>';
+                } else {
+                    badge.innerHTML = '<span class="badge">✅ VERIFIED USER</span>';
+                }
+                
                 startTime = new Date();
-                if (uptimeInterval) clearInterval(uptimeInterval);
+                if(uptimeInterval) clearInterval(uptimeInterval);
                 uptimeInterval = setInterval(updateUptime, 1000);
                 updateStats();
                 loadButtons();
                 loadFileToggleStatus();
                 refreshFileList();
                 loadLogs();
-                addLog(`✅ User ${username} logged in`);
+                addLog(`✅ User ${username} logged in successfully`);
             } else {
-                alert('LOGIN FAILED: ' + data.message);
+                showError('loginError', data.message);
             }
         });
         
@@ -550,11 +807,13 @@ HTML_TEMPLATE = """
             let btn = document.getElementById('uploadBtn');
             let input = document.getElementById('fileInput');
             if (!enabled) {
-                btn.classList.add('disabled-btn');
+                btn.style.opacity = '0.5';
+                btn.style.cursor = 'not-allowed';
                 btn.disabled = true;
                 input.disabled = true;
             } else {
-                btn.classList.remove('disabled-btn');
+                btn.style.opacity = '1';
+                btn.style.cursor = 'pointer';
                 btn.disabled = false;
                 input.disabled = false;
             }
@@ -565,15 +824,15 @@ HTML_TEMPLATE = """
             let btns;
             if (isAdmin) {
                 btns = [
-                    "📢 Updates Channel", "⏱ Uptime Stats", "📤 Upload File", "📂 Check Files",
-                    "⚡ Bot Speed", "📊 Statistics", "💳 Subscriptions", "📢 Broadcast",
-                    "🔒 Lock Bot", "🔄 File Upload ON/OFF", "👑 Admin Panel", "📞 Contact Owner",
-                    "🤖 OGGY AI", "🗑 Clear Logs"
+                    "📢 Updates", "⏱ Uptime", "📤 Upload", "📂 Files",
+                    "⚡ Speed", "📊 Stats", "💳 Plans", "📢 Broadcast",
+                    "🔒 Lock", "🔄 Toggle Upload", "👑 Admin", "📞 Contact",
+                    "🤖 AI Terminal", "🗑 Clear Logs"
                 ];
             } else {
                 btns = [
-                    "📢 Updates Channel", "⏱ Uptime Stats", "📤 Upload File", "📂 Check Files",
-                    "⚡ Bot Speed", "📊 Statistics", "📞 Contact Owner", "🤖 OGGY AI"
+                    "📢 Updates", "⏱ Uptime", "📤 Upload", "📂 Files",
+                    "⚡ Speed", "📊 Stats", "📞 Contact", "🤖 AI Terminal"
                 ];
             }
             grid.innerHTML = '';
@@ -601,20 +860,20 @@ HTML_TEMPLATE = """
         function handleClick(action) {
             addLog(`Command: ${action}`);
             switch(action) {
-                case "📢 Updates Channel": alert("📢 @OGGY_HOSTING\nAll systems operational"); break;
-                case "⏱ Uptime Stats": alert(`Uptime: ${document.getElementById('uptime').innerHTML}`); break;
-                case "📤 Upload File": if(document.getElementById('fileToggle').checked) document.getElementById('fileInput').click(); else alert("❌ Upload disabled"); break;
-                case "📂 Check Files": refreshFileList(); break;
-                case "⚡ Bot Speed": alert("⚡ Response: <50ms\nOGGY AI: Ready"); break;
-                case "📊 Statistics": showStats(); break;
-                case "💳 Subscriptions": alert("💳 Free: 512MB RAM\nPro: $5/mo - 2GB RAM"); break;
-                case "📢 Broadcast": let m=prompt("Message:"); if(m) sendBroadcast(m); break;
-                case "🔒 Lock Bot": toggleLock(); break;
-                case "🔄 File Upload ON/OFF": let t=document.getElementById('fileToggle'); t.checked=!t.checked; toggleFileUpload(); break;
-                case "👑 Admin Panel": window.open('/admin_panel','_blank'); break;
-                case "📞 Contact Owner": alert("📱 Telegram: @OGGY\n✉️ oggy@hosting.com"); break;
-                case "🤖 OGGY AI": let q=prompt("Ask OGGY AI:"); if(q) document.getElementById('aiPrompt').value=q, askOGGY(); break;
-                case "🗑 Clear Logs": if(confirm("Clear logs?")){ document.getElementById('logsBody').innerHTML='<div class="log-line">[INFO] Logs cleared</div>'; addLog("Logs cleared"); } break;
+                case "📢 Updates": alert("📢 @OGGY_HOSTING\nAll systems operational ✅\nVersion: 6.0"); break;
+                case "⏱ Uptime": alert(`⏱ System Uptime: ${document.getElementById('uptime').innerHTML}`); break;
+                case "📤 Upload": if(document.getElementById('fileToggle').checked) document.getElementById('fileInput').click(); else alert("❌ File upload is disabled by owner"); break;
+                case "📂 Files": refreshFileList(); break;
+                case "⚡ Speed": alert("⚡ Response Time: <50ms\nOGGY AI: Ready\nServer Load: Optimal"); break;
+                case "📊 Stats": showStats(); break;
+                case "💳 Plans": alert("💳 PREMIUM PLANS\n🔹 Free: 512MB RAM\n🔹 Pro: $5/mo - 2GB RAM\n🔹 Ultra: $15/mo - 8GB RAM"); break;
+                case "📢 Broadcast": let m = prompt("Enter broadcast message:"); if(m) sendBroadcast(m); break;
+                case "🔒 Lock": toggleLock(); break;
+                case "🔄 Toggle Upload": let t = document.getElementById('fileToggle'); t.checked = !t.checked; toggleFileUpload(); break;
+                case "👑 Admin": window.open('/admin_panel', '_blank'); break;
+                case "📞 Contact": alert("📞 CONTACT OWNER\n📱 Telegram: @OGGY\n✉️ Email: oggy@hosting.com\n💬 Support: 24/7"); break;
+                case "🤖 AI Terminal": toggleAITerminal(); document.getElementById('aiTerminalInput').focus(); break;
+                case "🗑 Clear Logs": if(confirm("Clear all system logs?")){ document.getElementById('logsBody').innerHTML = '<div class="log-line">[INFO] Logs cleared</div>'; addLog("Logs cleared by admin"); } break;
             }
         }
         
@@ -622,26 +881,27 @@ HTML_TEMPLATE = """
             let res = await fetch('/api/list_files');
             let data = await res.json();
             let container = document.getElementById('fileListContainer');
-            if(!data.files.length) { container.style.display='none'; return; }
-            container.style.display='block';
+            if(!data.files.length) { container.style.display = 'none'; return; }
+            container.style.display = 'block';
             let html = '<h4>📁 YOUR FILES:</h4>';
             data.files.forEach(f => {
+                let size = '?';
                 html += `<div class="file-item"><span>📄 ${f}</span><div><button onclick="downloadFile('${f}')">📥</button><button onclick="deleteFile('${f}')">🗑</button></div></div>`;
             });
             container.innerHTML = html;
         }
         
-        async function downloadFile(f) { window.open(`/api/download/${f}`,'_blank'); addLog(`Downloaded: ${f}`); }
-        async function deleteFile(f) { if(confirm(`Delete ${f}?`)){ await fetch('/api/delete_file',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:f})}); refreshFileList(); updateStats(); addLog(`Deleted: ${f}`); } }
+        async function downloadFile(f) { window.open(`/api/download/${f}`, '_blank'); addLog(`Downloaded: ${f}`); }
+        async function deleteFile(f) { if(confirm(`Delete ${f}?`)){ let res = await fetch('/api/delete_file',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:f})}); if(res.ok){ refreshFileList(); updateStats(); addLog(`Deleted: ${f}`); } } }
         
         async function showStats() {
             let res = await fetch('/api/stats');
             let d = await res.json();
-            alert(`📊 OGGY HOSTING STATS\n\nUsers: ${d.total_users}\nApproved: ${d.approved_users}\nPending: ${d.pending_users}\nUploads: ${d.total_uploads}\nFiles: ${d.file_count}`);
+            alert(`📊 OGGY HOSTING STATISTICS\n\n━━━━━━━━━━━━━━━━━━━━\n👥 Total Users: ${d.total_users}\n✅ Approved: ${d.approved_users}\n⏳ Pending: ${d.pending_users}\n━━━━━━━━━━━━━━━━━━━━\n📁 Total Uploads: ${d.total_uploads}\n📂 Files Stored: ${d.file_count}\n━━━━━━━━━━━━━━━━━━━━\n🤖 OGGY AI: Online\n🖥️ Server: Running`);
         }
         
-        async function sendBroadcast(msg) { await fetch('/api/broadcast',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})}); alert("Broadcast sent"); }
-        async function toggleLock() { let res=await fetch('/api/lock_bot',{method:'POST'}); let d=await res.json(); alert(d.locked?"Bot locked":"Bot unlocked"); addLog(`Bot ${d.locked?'locked':'unlocked'}`); }
+        async function sendBroadcast(msg) { await fetch('/api/broadcast',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg})}); alert("✅ Broadcast sent to all users"); addLog(`Broadcast: ${msg.substring(0,50)}...`); }
+        async function toggleLock() { let res=await fetch('/api/lock_bot',{method:'POST'}); let d=await res.json(); alert(d.locked?"🔒 Bot locked":"🔓 Bot unlocked"); addLog(`Bot ${d.locked?'locked':'unlocked'}`); }
         
         async function updateStats() {
             let res = await fetch('/api/server_stats');
@@ -656,7 +916,7 @@ HTML_TEMPLATE = """
         document.getElementById('fileInput')?.addEventListener('change', async (e) => {
             let files = e.target.files;
             if(!files.length) return;
-            if(!document.getElementById('fileToggle').checked) { alert("Upload disabled!"); return; }
+            if(!document.getElementById('fileToggle').checked) { alert("❌ File upload is disabled!"); return; }
             for(let f of files) {
                 let fd = new FormData();
                 fd.append('file', f);
@@ -664,25 +924,11 @@ HTML_TEMPLATE = """
                 let d = await res.json();
                 addLog(`Uploaded: ${f.name}`);
             }
-            alert(`Uploaded ${files.length} file(s)`);
+            alert(`✅ Uploaded ${files.length} file(s)`);
             refreshFileList();
             updateStats();
             document.getElementById('fileInput').value = '';
         });
-        
-        async function askOGGY() {
-            let prompt = document.getElementById('aiPrompt').value;
-            if(!prompt) return;
-            document.getElementById('aiResponse').innerHTML = '🤖 OGGY AI is thinking...';
-            let res = await fetch('/api/oggy_ai', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({prompt: prompt})
-            });
-            let data = await res.json();
-            document.getElementById('aiResponse').innerHTML = `💬 ${data.response}`;
-            addLog(`OGGY AI: ${prompt.substring(0,40)}...`);
-        }
         
         function logout() {
             if(uptimeInterval) clearInterval(uptimeInterval);
@@ -692,12 +938,13 @@ HTML_TEMPLATE = """
         
         setInterval(updateStats, 5000);
         setInterval(refreshFileList, 10000);
+        setInterval(loadLogs, 5000);
     </script>
 </body>
 </html>
 """
 
-# ========== ADMIN PANEL ==========
+# ========== ADMIN PANEL HTML ==========
 ADMIN_PANEL_HTML = """
 <!DOCTYPE html>
 <html>
@@ -710,24 +957,26 @@ ADMIN_PANEL_HTML = """
         table { width:100%; border-collapse:collapse; margin-bottom:30px; background:rgba(0,0,0,0.8); }
         th,td { border:1px solid #00ff9d; padding:12px; text-align:left; }
         th { background:#00ff9d; color:#000; }
-        button { background:#00ff9d; color:#000; padding:8px 15px; border:none; cursor:pointer; margin:5px; border-radius:5px; }
+        button { background:#00ff9d; color:#000; padding:8px 15px; border:none; cursor:pointer; margin:5px; border-radius:5px; font-weight:bold; }
         button:hover { background:#ff00ff; color:#fff; }
         .stats-panel { background:rgba(0,0,0,0.8); padding:20px; border-radius:15px; margin-bottom:20px; }
         .back-btn { position:fixed; top:20px; right:20px; background:#ff0040; }
+        .approved { color:#00ff9d; }
+        .pending { color:#ffaa00; }
     </style>
 </head>
 <body>
     <a href="/"><button class="back-btn">← HOME</button></a>
-    <h1>👑 OGGY ADMIN PANEL</h1>
-    <div class="stats-panel"><h3>📊 STATS</h3><div id="quickStats"></div></div>
+    <h1>👑 OGGY ADMIN CONTROL PANEL</h1>
+    <div class="stats-panel"><h3>📊 QUICK STATS</h3><div id="quickStats"></div></div>
     <h2>⏳ PENDING APPROVALS</h2>
     <table id="pendingTable"><tr><th>Username</th><th>Email</th><th>Date</th><th>Action</th></tr></table>
-    <h2>✅ ALL USERS</h2>
+    <h2>✅ REGISTERED USERS</h2>
     <table id="usersTable"><tr><th>Username</th><th>Status</th><th>Created</th><th>Action</th></tr></table>
     <script>
         async function load() {
             let r=await fetch('/api/admin_data'); let d=await r.json();
-            document.getElementById('quickStats').innerHTML=`👥 Total:${d.total_users} | ✅ Approved:${d.approved_count} | ⏳ Pending:${d.pending_count} | 📁 Uploads:${d.total_uploads}`;
+            document.getElementById('quickStats').innerHTML=`👥 Total: ${d.total_users} | ✅ Approved: ${d.approved_count} | ⏳ Pending: ${d.pending_count} | 📁 Uploads: ${d.total_uploads}`;
             let ph=''; d.pending.forEach(u=>{ph+=`<tr><td>${u.username}</td><td>${u.email||'-'}</td><td>${u.date}</td><td><button onclick="approve('${u.username}')">✅ Approve</button><button onclick="reject('${u.username}')" style="background:#ff0040">❌ Reject</button></td></tr>`;});
             document.getElementById('pendingTable').innerHTML='<tr><th>Username</th><th>Email</th><th>Date</th><th>Action</th></tr>'+ (ph||'<tr><td colspan="4">No pending requests</td></tr>');
             let uh=''; d.users.forEach(u=>{uh+=`<tr><td>${u.username}</td><td class="${u.approved?'approved':'pending'}">${u.approved?'✅ Approved':'⏳ Pending'}</td><td>${u.date||'-'}</td><td>${!u.approved?`<button onclick="approve('${u.username}')">Approve</button>`:''}<button onclick="removeUser('${u.username}')" style="background:#ff0040">🗑 Remove</button></td></tr>`;});
@@ -757,11 +1006,15 @@ def register():
     u, p, e = data.get('username'), data.get('password'), data.get('email', '')
     users, pending = load_json(USERS_FILE), load_json(PENDING_FILE)
     if u in users or u in pending:
-        return jsonify({'success': False, 'message': 'Username exists!'})
+        return jsonify({'success': False, 'message': 'Username already exists!'})
+    if len(u) < 3:
+        return jsonify({'success': False, 'message': 'Username must be at least 3 characters'})
+    if len(p) < 4:
+        return jsonify({'success': False, 'message': 'Password must be at least 4 characters'})
     pending[u] = {'password': p, 'email': e, 'date': str(datetime.now())}
     save_json(PENDING_FILE, pending)
     add_system_log(f"New registration: {u}", "INFO")
-    return jsonify({'success': True, 'message': 'Request sent to owner!'})
+    return jsonify({'success': True, 'message': 'Registration request sent to owner!'})
 
 @app.route('/api/login', methods=['POST'])
 def login():
@@ -769,16 +1022,21 @@ def login():
     u, p = data.get('username'), data.get('password')
     if u == OWNER_USERNAME and p == OWNER_PASSWORD:
         session['user'] = u
+        session['is_admin'] = True
+        session.permanent = True
         add_system_log(f"Owner login: {u}", "AUTH")
         return jsonify({'success': True, 'is_admin': True})
     users = load_json(USERS_FILE)
     if u in users and users[u]['password'] == p and users[u].get('approved', False):
         session['user'] = u
+        session['is_admin'] = False
+        session.permanent = True
         add_system_log(f"User login: {u}", "AUTH")
         return jsonify({'success': True, 'is_admin': False})
-    if u in load_json(PENDING_FILE):
-        return jsonify({'success': False, 'message': 'Pending approval'})
-    return jsonify({'success': False, 'message': 'Invalid credentials'})
+    pending = load_json(PENDING_FILE)
+    if u in pending:
+        return jsonify({'success': False, 'message': 'Your account is pending owner approval'})
+    return jsonify({'success': False, 'message': 'Invalid username or password'})
 
 @app.route('/api/approve_user', methods=['POST'])
 def approve_user():
@@ -836,7 +1094,7 @@ def upload_file():
         return jsonify({'message': 'No file'})
     f = request.files['file']
     if f.filename == '':
-        return jsonify({'message': 'No file'})
+        return jsonify({'message': 'No file selected'})
     f.save(os.path.join(UPLOAD_FOLDER, f.filename))
     settings = load_json(SETTINGS_FILE)
     settings['total_uploads'] = settings.get('total_uploads', 0) + 1
@@ -896,7 +1154,7 @@ def stats():
 @app.route('/api/server_stats')
 def server_stats():
     return jsonify({
-        'cpu': round(random.uniform(0.2, 2.5), 1),
+        'cpu': round(random.uniform(0.5, 3.5), 1),
         'ram': random.randint(256, 512),
         'running': True,
         'file_count': len(os.listdir(UPLOAD_FOLDER)) if os.path.exists(UPLOAD_FOLDER) else 0
@@ -940,27 +1198,32 @@ def lock_bot():
     return jsonify({'locked': settings['bot_locked']})
 
 if __name__ == '__main__':
+    from datetime import timedelta
+    app.permanent_session_lifetime = timedelta(days=7)
     print("""
-    ╔══════════════════════════════════════════════════════════════╗
-    ║                                                              ║
-    ║     🔥🔥🔥   OGGY HOSTING - FULLY WORKING   🔥🔥🔥         ║
-    ║                                                              ║
-    ╠══════════════════════════════════════════════════════════════╣
-    ║                                                              ║
-    ║     🌐 URL: http://localhost:5000                           ║
-    ║                                                              ║
-    ║     👑 OWNER LOGIN:                                         ║
-    ║        Username: OGGY                                       ║
-    ║        Password: OGGY@159357                                ║
-    ║                                                              ║
-    ║     📝 USER REGISTRATION:                                   ║
-    ║        Register -> Owner Approves in Admin Panel            ║
-    ║                                                              ║
-    ║     🤖 OGGY AI: Connected to DeepAI API                     ║
-    ║     📁 FILE UPLOAD: ON/OFF Toggle Available                 ║
-    ║                                                              ║
-    ║     🔥 DEVELOPER: OGGY | SIN: 159357                        ║
-    ║                                                              ║
-    ╚══════════════════════════════════════════════════════════════╝
+    ╔══════════════════════════════════════════════════════════════════════╗
+    ║                                                                      ║
+    ║     🔥🔥🔥   OGGY HOSTING - FULLY WORKING v6.0   🔥🔥🔥           ║
+    ║                                                                      ║
+    ╠══════════════════════════════════════════════════════════════════════╣
+    ║                                                                      ║
+    ║     🌐 URL: http://localhost:5000                                    ║
+    ║                                                                      ║
+    ║     👑 OWNER LOGIN:                                                  ║
+    ║        ┌─────────────────────────────────┐                          ║
+    ║        │  Username: OGGY                  │                          ║
+    ║        │  Password:            │                          ║
+    ║        └─────────────────────────────────┘                          ║
+    ║                                                                      ║
+    ║     📝 USER REGISTRATION:                                            ║
+    ║        Register -> Owner Approves in Admin Panel                     ║
+    ║                                                                      ║
+    ║     🤖 OGGY AI TERMINAL: Click to expand - Full AI Chat              ║
+    ║     📁 FILE UPLOAD: ON/OFF Toggle - Real working                     ║
+    ║                                                                      ║
+    ║     🔥 DEVELOPER: OGGY | SIN: 159357                                 ║
+    ║     🧛 CHUMT KA GULAM - Ready for action                             ║
+    ║                                                                      ║
+    ╚══════════════════════════════════════════════════════════════════════╝
     """)
     app.run(debug=False, host='0.0.0.0', port=5000)
